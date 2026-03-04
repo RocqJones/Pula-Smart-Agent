@@ -1,0 +1,12 @@
+CREATE TABLE survey_response (
+    id          TEXT    NOT NULL PRIMARY KEY,
+    farmer_id   TEXT    NOT NULL,
+    created_at  INTEGER NOT NULL,  -- Unix epoch millis, maps to kotlinx-datetime Instant
+    status      TEXT    NOT NULL,  -- SyncStatus enum name
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    last_error  TEXT               -- nullable: last SyncError description, null when clean
+);
+
+CREATE INDEX idx_survey_response_status
+    ON survey_response(status);
+

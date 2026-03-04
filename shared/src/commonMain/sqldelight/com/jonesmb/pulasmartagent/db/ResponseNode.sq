@@ -1,0 +1,21 @@
+CREATE TABLE response_node (
+    id             TEXT NOT NULL PRIMARY KEY,
+    survey_id      TEXT NOT NULL,
+    parent_node_id TEXT,           -- NULL = top-level node; non-NULL = nested inside a RepeatingSection
+    type           TEXT NOT NULL,  -- "ANSWER" | "REPEATING_SECTION"
+    question_id    TEXT,           -- populated when type = ANSWER
+    answer         TEXT,           -- populated when type = ANSWER
+    section_id     TEXT,           -- populated when type = REPEATING_SECTION
+
+    FOREIGN KEY (survey_id)      REFERENCES survey_response(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_node_id) REFERENCES response_node(id)   ON DELETE CASCADE
+);
+
+-- Fast lookup of all nodes belonging to a survey (most common query)
+CREATE INDEX idx_response_node_survey_id
+    ON response_node(survey_id);
+
+-- Fast traversal of child nodes within a repeating section
+CREATE INDEX idx_response_node_parent
+    ON response_node(parent_node_id);
+

@@ -1,0 +1,12 @@
+CREATE TABLE attachment (
+    id            TEXT NOT NULL PRIMARY KEY,
+    survey_id     TEXT NOT NULL,
+    local_path    TEXT NOT NULL,
+    upload_status TEXT NOT NULL,  -- AttachmentUploadStatus enum name
+
+    FOREIGN KEY (survey_id) REFERENCES survey_response(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_attachment_survey_id
+    ON attachment(survey_id);
+

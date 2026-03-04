@@ -3,6 +3,7 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
     alias(libs.plugins.androidLibrary)
+    alias(libs.plugins.sqldelight)
 }
 
 kotlin {
@@ -25,6 +26,14 @@ kotlin {
     sourceSets {
         commonMain.dependencies {
             implementation(libs.kotlinx.datetime)
+            implementation(libs.sqldelight.runtime)
+            implementation(libs.sqldelight.coroutines)
+        }
+        androidMain.dependencies {
+            implementation(libs.sqldelight.driver.android)
+        }
+        iosMain.dependencies {
+            implementation(libs.sqldelight.driver.native)
         }
         commonTest.dependencies {
             implementation(libs.kotlin.test)
@@ -41,5 +50,14 @@ android {
     }
     defaultConfig {
         minSdk = libs.versions.android.minSdk.get().toInt()
+    }
+}
+
+sqldelight {
+    databases {
+        create("SmartAgentDatabase") {
+            packageName.set("com.jonesmb.pulasmartagent.db")
+            srcDirs.setFrom("src/commonMain/sqldelight")
+        }
     }
 }
