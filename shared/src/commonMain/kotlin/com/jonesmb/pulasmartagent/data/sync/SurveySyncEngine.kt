@@ -38,7 +38,7 @@ class SurveySyncEngine(
                     break
                 }
 
-                val result = api.upload(survey)
+                val result = api.uploadSurvey(survey)
 
                 result.fold(
                     onSuccess = {
