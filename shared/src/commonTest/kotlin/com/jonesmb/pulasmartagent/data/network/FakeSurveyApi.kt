@@ -1,6 +1,7 @@
 package com.jonesmb.pulasmartagent.data.network
 
-import com.jonesmb.pulasmartagent.data.sync.SyncErrorException
+import com.jonesmb.pulasmartagent.core.network.HttpException
+import com.jonesmb.pulasmartagent.core.network.SyncErrorException
 import com.jonesmb.pulasmartagent.domain.errors.SyncError
 import com.jonesmb.pulasmartagent.domain.model.SurveyResponse
 
@@ -13,9 +14,7 @@ class FakeSurveyApi(
     override suspend fun uploadSurvey(response: SurveyResponse): Result<Unit> {
         return when (val outcome = behavior(callCount++)) {
             FakeApiResponse.Success -> Result.success(Unit)
-            is FakeApiResponse.ServerError -> Result.failure(
-                SyncErrorException(SyncError.ServerError(outcome.code))
-            )
+            is FakeApiResponse.ServerError -> Result.failure(HttpException(outcome.code))
             FakeApiResponse.Timeout -> Result.failure(
                 SyncErrorException(SyncError.Timeout)
             )

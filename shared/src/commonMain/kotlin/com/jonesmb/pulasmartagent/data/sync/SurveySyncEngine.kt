@@ -1,5 +1,6 @@
 package com.jonesmb.pulasmartagent.data.sync
 
+import com.jonesmb.pulasmartagent.core.extensions.toSyncError
 import com.jonesmb.pulasmartagent.data.network.SurveyApi
 import com.jonesmb.pulasmartagent.domain.errors.SyncError
 import com.jonesmb.pulasmartagent.domain.model.SyncResult
@@ -90,12 +91,4 @@ class SurveySyncEngine(
             SyncResult(succeeded, failed, stopReason)
         }
     }
-
-    private fun Throwable.toSyncError(): SyncError = when (this) {
-        is SyncErrorException -> error
-        else -> SyncError.Unknown
-    }
 }
-
-// Bridges between Throwable (what Result.Failure carries) and the typed SyncError hierarchy
-class SyncErrorException(val error: SyncError) : Exception(error.toString())
