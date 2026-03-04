@@ -1,20 +1,15 @@
-This is a Kotlin Multiplatform project targeting Android, iOS.
+# Smart Agent
 
-* [/composeApp](./composeApp/src) is for code that will be shared across your Compose Multiplatform applications.
-  It contains several subfolders:
-  - [commonMain](./composeApp/src/commonMain/kotlin) is for code that’s common for all targets.
-  - Other folders are for Kotlin code that will be compiled for only the platform indicated in the folder name.
-    For example, if you want to use Apple’s CoreCrypto for the iOS part of your Kotlin app,
-    the [iosMain](./composeApp/src/iosMain/kotlin) folder would be the right place for such calls.
-    Similarly, if you want to edit the Desktop (JVM) specific part, the [jvmMain](./composeApp/src/jvmMain/kotlin)
-    folder is the appropriate location.
+Smart Agent is a Kotlin Multiplatform (KMP) mobile application targeting **Android** and **iOS**.  
+Built with Compose Multiplatform for the UI layer and following an **MVI + offline-first** architecture with a single source of truth driven by a local database.
 
-* [/iosApp](./iosApp/iosApp) contains iOS applications. Even if you’re sharing your UI with Compose Multiplatform,
-  you need this entry point for your iOS app. This is also where you should add SwiftUI code for your project.
+## Project structure
 
-* [/shared](./shared/src) is for the code that will be shared between all targets in the project.
-  The most important subfolder is [commonMain](./shared/src/commonMain/kotlin). If preferred, you
-  can add code to the platform-specific folders here too.
+| Module | Purpose |
+|---|---|
+| [`composeApp`](./composeApp/src) | Android & shared UI — Compose Multiplatform screens, ViewModels, MVI state |
+| [`shared`](./shared/src) | Pure Kotlin business logic shared across all platforms (domain, data, db, platform) |
+| [`iosApp`](./iosApp/iosApp) | iOS entry point — SwiftUI host that loads the shared Compose UI |
 
 ### Build and Run Android Application
 
@@ -36,4 +31,39 @@ in your IDE’s toolbar or open the [/iosApp](./iosApp) directory in Xcode and r
 
 ---
 
-Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html)…
+## Module / package structure
+
+All shared business logic lives under `shared/src/commonMain/kotlin/com/jonesmb/pulasmartagent/`.  
+Matching test packages live under `shared/src/commonTest/kotlin/com/jonesmb/pulasmartagent/`.
+
+```
+com.jonesmb.pulasmartagent
+│
+├── domain/                   # Pure business logic — no Android/iOS imports
+│   ├── model/                # Core data classes & entities (e.g. Survey, Field, Answer)
+│   ├── errors/               # Sealed domain error/exception hierarchy
+│   └── time/                 # Platform-agnostic date/time wrappers and utilities
+│
+├── data/                     # Implementations that satisfy domain contracts
+│   ├── repository/           # Repository implementations (coordinate db + network)
+│   ├── sync/                 # Offline-first sync logic (conflict resolution, work queue)
+│   ├── network/              # API client interfaces & DTOs (Ktor, serialization)
+│   ├── attachments/          # Photo / file upload & local caching strategies
+│   └── diagnostics/          # Logging, analytics events, crash-report helpers
+│
+├── db/                       # SQLDelight (or equivalent) database layer
+│   ├── driver/               # expect/actual DatabaseDriver factory per platform
+│   └── adapters/             # Column adapters (e.g. enum ↔ TEXT, Instant ↔ INTEGER)
+│
+└── platform/                 # expect declarations fulfilled by androidMain / iosMain
+    ├── network/              # Connectivity checks, reachability
+    ├── filesystem/           # File paths, caching directories, read/write helpers
+    └── devicestate/          # Battery, storage, locale — anything device-specific
+```
+
+> **Rule of thumb:**  
+> `domain` must never import from `data`, `db`, or `platform`.  
+> `data` may import `domain` and `db`.  
+> `platform` packages contain only `expect` interfaces in `commonMain`; the actual implementations live in `androidMain` and `iosMain`.
+
+---
