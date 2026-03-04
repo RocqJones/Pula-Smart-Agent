@@ -43,7 +43,11 @@ class SurveyRepositoryImpl(driver: SqlDriver) : SurveyRepository {
                     id = attachment.id,
                     survey_id = attachment.surveyId,
                     local_path = attachment.localPath,
+                    size_bytes = attachment.sizeBytes,
+                    created_at = attachment.createdAt.toEpochMilliseconds(),
                     upload_status = attachment.uploadStatus.name,
+                    retry_count = attachment.retryCount.toLong(),
+                    last_error = attachment.lastError,
                 )
             }
         }
@@ -147,7 +151,11 @@ class SurveyRepositoryImpl(driver: SqlDriver) : SurveyRepository {
         id = id,
         surveyId = survey_id,
         localPath = local_path,
+        sizeBytes = size_bytes,
+        createdAt = Instant.fromEpochMilliseconds(created_at),
         uploadStatus = AttachmentUploadStatus.valueOf(upload_status),
+        retryCount = retry_count.toInt(),
+        lastError = last_error,
     )
 
     /**

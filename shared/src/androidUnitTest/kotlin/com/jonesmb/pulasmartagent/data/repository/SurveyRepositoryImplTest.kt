@@ -103,8 +103,8 @@ class SurveyRepositoryImplTest {
     @Test
     fun `saved survey with attachments reconstructs attachments`() = runTest {
         val attachments = listOf(
-            Attachment("att-1", "s1", "/img/photo1.jpg", AttachmentUploadStatus.PENDING),
-            Attachment("att-2", "s1", "/img/photo2.jpg", AttachmentUploadStatus.PENDING),
+            Attachment("att-1", "s1", "/img/photo1.jpg", 204_800L, Instant.parse("2026-03-04T08:00:00Z"), AttachmentUploadStatus.PENDING, 0, null),
+            Attachment("att-2", "s1", "/img/photo2.jpg", 307_200L, Instant.parse("2026-03-04T08:00:00Z"), AttachmentUploadStatus.PENDING, 0, null),
         )
         repo.saveSurvey(survey("s1", attachments = attachments))
 
