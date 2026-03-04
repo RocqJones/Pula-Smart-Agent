@@ -15,9 +15,8 @@ class FakeSurveyApi(
         return when (val outcome = behavior(callCount++)) {
             FakeApiResponse.Success -> Result.success(Unit)
             is FakeApiResponse.ServerError -> Result.failure(HttpException(outcome.code))
-            FakeApiResponse.Timeout -> Result.failure(
-                SyncErrorException(SyncError.Timeout)
-            )
+            FakeApiResponse.Timeout -> Result.failure(SyncErrorException(SyncError.Timeout))
+            FakeApiResponse.NetworkLost -> Result.failure(SyncErrorException(SyncError.NoInternet))
         }
     }
 }
@@ -26,5 +25,6 @@ sealed class FakeApiResponse {
     data object Success : FakeApiResponse()
     data class ServerError(val code: Int = 500) : FakeApiResponse()
     data object Timeout : FakeApiResponse()
+    data object NetworkLost : FakeApiResponse()
 }
 
