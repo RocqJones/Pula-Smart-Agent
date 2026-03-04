@@ -134,7 +134,7 @@ class SurveySyncEngineTest {
         val (eng, repo, _) = engine(
             surveys,
             FakeSurveyApi { FakeApiResponse.Success },
-            availableStorageBytes = 10 * 1024 * 1024L, // 10 MB — below 50 MB threshold
+            availableStorageBytes = 10 * 1024 * 1024L, // 10 MB — below StoragePolicy.MIN_REQUIRED_FREE_SPACE_BYTES (100 MB)
         )
 
         val result = eng.sync()

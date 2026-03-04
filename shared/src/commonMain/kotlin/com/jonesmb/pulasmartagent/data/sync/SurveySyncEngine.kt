@@ -1,6 +1,6 @@
 package com.jonesmb.pulasmartagent.data.sync
 
-import com.jonesmb.pulasmartagent.core.constants.Constants.CRITICAL_STORAGE_THRESHOLD_BYTES
+import com.jonesmb.pulasmartagent.core.constants.StoragePolicy
 import com.jonesmb.pulasmartagent.core.extensions.toSyncError
 import com.jonesmb.pulasmartagent.data.network.SurveyApi
 import com.jonesmb.pulasmartagent.domain.errors.SyncError
@@ -33,7 +33,7 @@ class SurveySyncEngine(
             val failed = mutableListOf<String>()
             var stopReason: SyncStopReason? = null
 
-            if (fileSystem.getAvailableStorageBytes() < CRITICAL_STORAGE_THRESHOLD_BYTES) {
+            if (fileSystem.getAvailableStorageBytes() < StoragePolicy.MIN_REQUIRED_FREE_SPACE_BYTES) {
                 return@withContext SyncResult(succeeded, failed, SyncStopReason.LowStorage)
             }
 
@@ -51,7 +51,9 @@ class SurveySyncEngine(
                 result.fold(
                     onSuccess = {
                         repository.markAsSynced(survey.id)
-                        survey.attachments.forEach { fileSystem.delete(it.localPath) }
+                        if (StoragePolicy.AUTO_DELETE_AFTER_UPLOAD) {
+                            survey.attachments.forEach { fileSystem.delete(it.localPath) }
+                        }
                         succeeded.add(survey.id)
                     },
                     onFailure = { throwable ->
