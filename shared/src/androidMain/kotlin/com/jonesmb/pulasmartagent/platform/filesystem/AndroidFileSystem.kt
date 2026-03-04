@@ -1,23 +1,16 @@
 package com.jonesmb.pulasmartagent.platform.filesystem
 
-import android.os.Environment
-import android.os.StatFs
+import android.content.Context
 import java.io.File
 
-class AndroidFileSystem : FileSystem {
+class AndroidFileSystem(private val context: Context) : FileSystem {
 
-    override fun delete(path: String): Boolean = File(path).delete()
+    override fun delete(path: String): Boolean =
+        runCatching { File(path).delete() }.getOrDefault(false)
 
     override fun exists(path: String): Boolean = File(path).exists()
 
-    override fun getFileSize(path: String): Long {
-        val file = File(path)
-        return if (file.exists()) file.length() else 0L
-    }
+    override fun getFileSize(path: String): Long = File(path).length()
 
-    override fun getAvailableStorageBytes(): Long {
-        val stat = StatFs(Environment.getExternalStorageDirectory().path)
-        return stat.availableBlocksLong * stat.blockSizeLong
-    }
+    override fun getAvailableStorageBytes(): Long = context.filesDir.usableSpace
 }
-
