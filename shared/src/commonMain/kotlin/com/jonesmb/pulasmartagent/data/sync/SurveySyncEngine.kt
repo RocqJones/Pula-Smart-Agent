@@ -1,11 +1,13 @@
 package com.jonesmb.pulasmartagent.data.sync
 
+import com.jonesmb.pulasmartagent.core.constants.Constants.CRITICAL_STORAGE_THRESHOLD_BYTES
 import com.jonesmb.pulasmartagent.core.extensions.toSyncError
 import com.jonesmb.pulasmartagent.data.network.SurveyApi
 import com.jonesmb.pulasmartagent.domain.errors.SyncError
 import com.jonesmb.pulasmartagent.domain.model.SyncResult
 import com.jonesmb.pulasmartagent.domain.model.SyncStopReason
 import com.jonesmb.pulasmartagent.domain.repository.SurveyRepository
+import com.jonesmb.pulasmartagent.platform.filesystem.FileSystem
 import com.jonesmb.pulasmartagent.platform.network.NetworkMonitor
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.sync.Mutex
@@ -20,6 +22,7 @@ class SurveySyncEngine(
     private val repository: SurveyRepository,
     private val api: SurveyApi,
     private val networkMonitor: NetworkMonitor,
+    private val fileSystem: FileSystem,
     private val dispatcher: CoroutineDispatcher,
 ) {
     private val mutex = Mutex()
@@ -29,6 +32,10 @@ class SurveySyncEngine(
             val succeeded = mutableListOf<String>()
             val failed = mutableListOf<String>()
             var stopReason: SyncStopReason? = null
+
+            if (fileSystem.getAvailableStorageBytes() < CRITICAL_STORAGE_THRESHOLD_BYTES) {
+                return@withContext SyncResult(succeeded, failed, SyncStopReason.LowStorage)
+            }
 
             val pending = repository.getPendingSurveys()
 
@@ -44,6 +51,7 @@ class SurveySyncEngine(
                 result.fold(
                     onSuccess = {
                         repository.markAsSynced(survey.id)
+                        survey.attachments.forEach { fileSystem.delete(it.localPath) }
                         succeeded.add(survey.id)
                     },
                     onFailure = { throwable ->
@@ -55,18 +63,10 @@ class SurveySyncEngine(
                                 repository.incrementRetry(survey.id)
                                 failed.add(survey.id)
                                 stopReason = when (error) {
-                                    SyncError.NoInternet -> {
-                                        SyncStopReason.NetworkLost
-                                    }
-                                    else -> {
-                                        SyncStopReason.FatalError
-                                    }
+                                    SyncError.NoInternet -> SyncStopReason.NetworkLost
+                                    else -> SyncStopReason.FatalError
                                 }
-                                return@withContext SyncResult(
-                                    succeeded,
-                                    failed,
-                                    stopReason
-                                )
+                                return@withContext SyncResult(succeeded, failed, stopReason)
                             }
                             error.isRetriable -> {
                                 repository.markAsFailed(survey.id, error)
@@ -77,11 +77,7 @@ class SurveySyncEngine(
                                 repository.markAsFailed(survey.id, error)
                                 failed.add(survey.id)
                                 stopReason = SyncStopReason.FatalError
-                                return@withContext SyncResult(
-                                    succeeded,
-                                    failed,
-                                    stopReason
-                                )
+                                return@withContext SyncResult(succeeded, failed, stopReason)
                             }
                         }
                     }

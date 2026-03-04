@@ -8,6 +8,7 @@ import com.jonesmb.pulasmartagent.domain.model.SyncStopReason
 import com.jonesmb.pulasmartagent.domain.model.SurveyResponse
 import com.jonesmb.pulasmartagent.domain.model.status.SyncStatus
 import com.jonesmb.pulasmartagent.domain.repository.FakeSurveyRepository
+import com.jonesmb.pulasmartagent.platform.filesystem.FakeFileSystem
 import com.jonesmb.pulasmartagent.platform.network.FakeNetworkMonitor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -35,17 +36,18 @@ class SurveySyncEngineTest {
         surveys: List<SurveyResponse>,
         api: FakeSurveyApi,
         connected: Boolean = true,
-    ): Pair<SurveySyncEngine, FakeSurveyRepository> {
+        availableStorageBytes: Long = Long.MAX_VALUE,
+    ): Triple<SurveySyncEngine, FakeSurveyRepository, FakeFileSystem> {
         val repo = FakeSurveyRepository(surveys.toMutableList())
         val monitor = FakeNetworkMonitor(connected)
-        return SurveySyncEngine(repo, api, monitor, Dispatchers.Unconfined) to repo
+        val fs = FakeFileSystem(availableStorageBytes)
+        return Triple(SurveySyncEngine(repo, api, monitor, fs, Dispatchers.Unconfined), repo, fs)
     }
 
-    // tests
     @Test
     fun `all surveys succeed`() = runTest {
         val surveys = (1..5).map { survey("s$it") }
-        val (eng, repo) = engine(surveys, FakeSurveyApi { FakeApiResponse.Success })
+        val (eng, repo, _) = engine(surveys, FakeSurveyApi { FakeApiResponse.Success })
 
         val result = eng.sync()
 
@@ -62,7 +64,7 @@ class SurveySyncEngineTest {
         val api = FakeSurveyApi { call ->
             if (call < 5) FakeApiResponse.Success else FakeApiResponse.ServerError(500)
         }
-        val (eng, repo) = engine(surveys, api)
+        val (eng, repo, _) = engine(surveys, api)
 
         val result = eng.sync()
 
@@ -82,7 +84,7 @@ class SurveySyncEngineTest {
                 else -> FakeApiResponse.Timeout
             }
         }
-        val (eng, repo) = engine(surveys, api)
+        val (eng, repo, _) = engine(surveys, api)
 
         val result = eng.sync()
 
@@ -95,7 +97,7 @@ class SurveySyncEngineTest {
 
     @Test
     fun `empty queue returns empty result with no stop reason`() = runTest {
-        val (eng, _) = engine(emptyList(), FakeSurveyApi { FakeApiResponse.Success })
+        val (eng, _, _) = engine(emptyList(), FakeSurveyApi { FakeApiResponse.Success })
 
         val result = eng.sync()
 
@@ -109,7 +111,7 @@ class SurveySyncEngineTest {
         val surveys = (1..4).map { survey("s$it") }
         var uploadCount = 0
         val api = FakeSurveyApi { uploadCount++; FakeApiResponse.Success }
-        val (eng, _) = engine(surveys, api)
+        val (eng, _, _) = engine(surveys, api)
 
         val first = async { eng.sync() }
         val second = async { eng.sync() }
@@ -124,5 +126,22 @@ class SurveySyncEngineTest {
         val combined = r1.succeededIds + r2.succeededIds
         assertEquals(4, combined.size)
         assertTrue(r1.failedIds.isEmpty() && r2.failedIds.isEmpty())
+    }
+
+    @Test
+    fun `sync stops immediately with LowStorage when available bytes below threshold`() = runTest {
+        val surveys = (1..3).map { survey("s$it") }
+        val (eng, repo, _) = engine(
+            surveys,
+            FakeSurveyApi { FakeApiResponse.Success },
+            availableStorageBytes = 10 * 1024 * 1024L, // 10 MB — below 50 MB threshold
+        )
+
+        val result = eng.sync()
+
+        assertEquals(SyncStopReason.LowStorage, result.stoppedReason)
+        assertTrue(result.succeededIds.isEmpty())
+        assertTrue(result.failedIds.isEmpty())
+        assertTrue(repo.synced.isEmpty())
     }
 }

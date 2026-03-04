@@ -2,6 +2,7 @@ package com.jonesmb.pulasmartagent.domain.model
 
 sealed class SyncStopReason {
     data object NetworkLost : SyncStopReason()
+    data object LowStorage : SyncStopReason()
     data object FatalError : SyncStopReason()
     data object None : SyncStopReason()
 }
