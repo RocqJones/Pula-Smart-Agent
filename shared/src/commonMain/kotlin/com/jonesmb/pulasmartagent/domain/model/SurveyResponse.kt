@@ -4,8 +4,7 @@ import com.jonesmb.pulasmartagent.domain.model.status.SyncStatus
 import kotlinx.datetime.Instant
 
 /**
- * This is the root aggregate of our sync engine. Everything that needs to reach
- * the server is reachable from this object.
+ * This is the root aggregate of our sync engine. Server ready object.
  *
  * Sync lifecycle?
  * PENDING → IN_PROGRESS → SYNCED ↘ FAILED  (retryCount incremented, back to PENDING after back-off)
