@@ -34,6 +34,7 @@ class SurveySyncEngine(
         withContext(dispatcher) {
             val succeeded = mutableListOf<String>()
             val failed = mutableListOf<String>()
+            var stopReason: SyncStopReason? = null
 
             if (fileSystem.getAvailableStorageBytes() < StoragePolicy.MIN_REQUIRED_FREE_SPACE_BYTES) {
                 return@withContext SyncResult(succeeded, failed, SyncStopReason.LowStorage)
@@ -47,13 +48,13 @@ class SurveySyncEngine(
                     return@withContext SyncResult(succeeded, failed, SyncStopReason.NetworkLost)
                 }
 
-                // Phase 1 — upload survey metadata
-                val metaStop = uploadMeta(survey, failed)
-                if (metaStop != null) {
-                    return@withContext SyncResult(succeeded, failed, metaStop)
-                }
+                // Phase 1 — upload survey metadata.
+                // Returns: true = proceed, false = survey failed (continue to next), null = abort sync.
+                val metaOk = uploadMeta(survey, failed, onStop = { stopReason = it })
+                if (metaOk == null) return@withContext SyncResult(succeeded, failed, stopReason)
+                if (!metaOk) continue
 
-                // Phase 2 — upload attachments sequentially
+                // Phase 2 — upload attachments sequentially.
                 val attachStop = uploadAttachments(survey, failed)
                 if (attachStop != null) {
                     return@withContext SyncResult(succeeded, failed, attachStop)
@@ -67,19 +68,21 @@ class SurveySyncEngine(
         }
     }
 
-    // Returns non-null SyncStopReason when the engine must abort; null means continue to next survey.
+    // true = ok, false = survey failed (continue), null = abort (stopReason is set via onStop)
     private suspend fun uploadMeta(
         survey: SurveyResponse,
         failed: MutableList<String>,
-    ): SyncStopReason? {
+        onStop: (SyncStopReason) -> Unit,
+    ): Boolean? {
         val result = api.uploadSurvey(survey)
         return result.fold(
-            onSuccess = { null },
+            onSuccess = { true },
             onFailure = { throwable ->
                 val error = throwable.toSyncError()
                 repository.markAsFailed(survey.id, error)
                 failed.add(survey.id)
-                applyRetryPolicy(survey.id, error)
+                val stop = applyRetryPolicy(survey.id, error)
+                if (stop != null) { onStop(stop); null } else false
             }
         )
     }
@@ -133,7 +136,7 @@ class SurveySyncEngine(
      * - Unknown / Serialization - FatalError   (stop)
      */
     private suspend fun applyRetryPolicy(id: String, error: SyncError): SyncStopReason? = when (error) {
-        is SyncError.NoInternet, SyncError.Timeout -> SyncStopReason.NetworkLost
+        SyncError.NoInternet, SyncError.Timeout -> SyncStopReason.NetworkLost
         is SyncError.ServerError if error.code in 400..499 -> { repository.pinRetryToMax(id); null }
         is SyncError.ServerError if error.code >= 500 -> { repository.incrementRetry(id); null }
         else -> SyncStopReason.FatalError
@@ -147,7 +150,7 @@ class SurveySyncEngine(
      * - Unknown / other fatal  - FatalError   (stop)
      */
     private fun attachmentStopReasonFor(error: SyncError): SyncStopReason? = when (error) {
-        is SyncError.NoInternet, SyncError.Timeout -> SyncStopReason.NetworkLost
+        SyncError.NoInternet, SyncError.Timeout -> SyncStopReason.NetworkLost
         is SyncError.ServerError if error.code in 400..499 -> SyncStopReason.FatalError
         is SyncError.ServerError if error.code >= 500 -> null
         else -> SyncStopReason.FatalError

@@ -1,5 +1,6 @@
 package com.jonesmb.pulasmartagent.data.sync
 
+import com.jonesmb.pulasmartagent.core.constants.StoragePolicy
 import com.jonesmb.pulasmartagent.data.network.FakeApiResponse
 import com.jonesmb.pulasmartagent.data.network.FakeSurveyApi
 import com.jonesmb.pulasmartagent.domain.model.Attachment
@@ -226,6 +227,24 @@ class SurveySyncEngineTest {
         assertTrue(result.succeededIds.isEmpty())
         assertTrue(result.failedIds.isEmpty())
         assertTrue(h.repo.synced.isEmpty())
+    }
+
+    @Test
+    fun `low storage stops sync before any API call is made`() = runTest {
+        var uploadCallCount = 0
+        val api = FakeSurveyApi(surveyBehavior = { uploadCallCount++; FakeApiResponse.Success })
+        val h = engine(
+            surveys = (1..3).map { survey("s$it") },
+            api = api,
+            availableStorageBytes = StoragePolicy.MIN_REQUIRED_FREE_SPACE_BYTES - 1,
+        )
+
+        val result = h.engine.sync()
+
+        assertEquals(SyncStopReason.LowStorage, result.stoppedReason)
+        assertEquals(0, uploadCallCount)
+        assertTrue(result.succeededIds.isEmpty())
+        assertTrue(result.failedIds.isEmpty())
     }
 
     @Test
