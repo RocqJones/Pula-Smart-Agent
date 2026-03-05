@@ -1,119 +1,69 @@
 # Architecture
 
-## 1. Architecture Overview
+## Overview
 
-Smart Agent is a Kotlin Multiplatform Mobile (KMM) app using a clean, layered design so sync logic is shared across Android and iOS. Platform-specific concerns (connectivity, filesystem, DB driver) are pushed behind `expect/actual` abstractions.
-
-Goal: offline-first on unreliable connectivity and low-end devices (limited RAM/storage).
-
-### High-level diagram
+Smart Agent uses a clean, layered KMM architecture so core sync logic runs identically on Android and iOS. Platform concerns (connectivity, filesystem, DB driver) sit behind `expect/actual` abstractions.
 
 ```
-              +--------------------+
-              |   composeApp (UI)  |
-              |  MVI state + UI    |
-              +----------+---------+
-                         |
-                         v
-+---------------------------------------------------+
-|                 shared (commonMain)               |
-|                                                   |
-|  domain/  <- models + rules + repo interfaces      |
-|     ^                                             |
-|     |                                             |
-|  data/    <- SurveySyncEngine + repository impls   |
-|     |            |                                |
-|     |            +--> SurveyApi (network contract) |
-|     |            +--> SQLDelight repositories      |
-|     |            +--> FileSystem (expect)         |
-|     v                                             |
-|  db/     <- SQLDelight schema + adapters           |
-|                                                   |
-|  platform/ <- NetworkMonitor + FileSystem (expect) |
-+-------------------+-------------------------------+
-                    | actual implementations
-        +-----------+------------+     +------------+-----------+
-        |   androidMain          |     |    iosMain             |
-        | ConnectivityManager    |     | NWPathMonitor          |
-        | java.io.File           |     | NSFileManager          |
-        | AndroidSqliteDriver    |     | NativeSqliteDriver     |
-        +------------------------+     +------------------------+
+  composeApp (UI / MVI)
+         |
+  shared (commonMain)
+  ├── domain/    ← pure models, no platform imports
+  ├── data/      ← SurveySyncEngine, repositories, SurveyApi
+  ├── db/        ← SQLDelight schema + adapters
+  └── platform/  ← NetworkMonitor, FileSystem (expect)
+         |
+  androidMain          iosMain
+  ConnectivityManager  NWPathMonitor
+  java.io.File         NSFileManager
+  AndroidSqliteDriver  NativeSqliteDriver
 ```
 
-Layers:
+## Why this architecture? Alternatives considered
 
-- `domain/` — pure models + contracts
-- `data/` — sync engine, repository implementations, API contracts
-- `db/` — SQLDelight database layer
-- `platform/` — KMP abstractions implemented per platform
+Clean architecture was chosen so the sync engine can be tested without a device, a database, or a real server. The strict dependency rule — domain knows nothing about storage or network — makes error classification and retry policies easy to verify in isolation.
 
-## 2. Domain Layer
+**Alternatives considered:**
 
-Domain defines the portable business model:
+- **Room + ViewModel (Android-only):** Locks business logic to Android. KMM avoids rewriting the retry policy and error model twice for an iOS port.
+- **WorkManager-first:** WorkManager schedules work well but doesn't own upload logic. Building the engine first keeps it testable; WorkManager can wrap it later.
+- **Event sourcing / outbox pattern:** Overkill here. A retry-count cap gives sufficient durability without the operational complexity.
 
-- `SurveyResponse` (farmerId, nodes, attachments, `SyncStatus`, retryCount)
-- `ResponseNode` sealed tree: `Answer` and `RepeatingSection` (dynamic instances)
-- `Attachment` (localPath, size, upload status, retryCount, lastError)
-- `SyncError` sealed error model with `isRetriable`
+## Photo compression extension
 
-No database or platform dependencies, keeping the layer testable and reusable.
+A `compressPhoto` `expect` function is defined in `commonMain` with JPEG implementations in `androidMain` (`Bitmap.compress`) and `iosMain` (`UIImage.jpegData`). Compression runs in `AttachmentManager` before upload, writing to a temp path. The original is preserved until upload succeeds, then both files are deleted. `CompressionPolicy.JPEG_QUALITY` and `MAX_DIMENSION_PX` tune the output without code changes.
 
-## 3. Data Layer and Sync Engine
+## Network detection — where it can go wrong
 
-`SurveySyncEngine` orchestrates uploads:
+`ConnectivityManager` reports connected the moment a network interface is active. A device behind a captive portal or a router with no upstream internet appears online — the engine attempts uploads, receives `IOException`s, and stops the queue as `NetworkLost`. This is a false negative. **Mitigation:** perform a lightweight HTTPS HEAD probe to the API base URL before starting a sync batch. One small request converts the binary connected/not-connected signal into confirmed-reachable.
 
-1. Pre-flight storage check via `FileSystem.getAvailableStorageBytes()`
-2. Fetch pending work from `SurveyRepository`
-3. For each survey: upload metadata → upload attachments sequentially → mark synced
+## Remote troubleshooting without device access
 
-Progress is persisted immediately (no rollback). A `Mutex` ensures only one sync run executes at a time.
+The `DiagnosticsReport` domain model captures what support needs:
 
-Error rules (survey metadata upload):
+- per-attempt log: `surveyId`, timestamp, HTTP status, exception type, `retryCount`, stop reason
+- device context: Android API level, free storage bytes, network type, battery percent
+- `last_error` is already persisted per survey and attachment in SQLDelight
 
-- `IOException` / `TimeoutCancellationException` → mark FAILED, stop queue: `NetworkLost`
-- HTTP 500+ → mark FAILED, increment retry, continue
-- HTTP 400–499 → mark FAILED, pin retry count to max, continue
-- unknown/fatal → stop queue: `FatalError`
+A lightweight JSON payload assembled from the local DB can be sent as a low-priority upload when connectivity is restored — no third-party SDK required.
 
-Sync outcomes are reported via `SyncResult` (succeededIds, failedIds, stoppedReason).
+## GPS and geospatial challenges
 
-## 4. Local Persistence
+Rural Sub-Saharan Africa presents specific problems for field boundary capture:
 
-SQLDelight tables:
+- Canopy and valley terrain can push horizontal GPS accuracy to 10–50m. Boundaries may not close or may overlap adjacent fields.
+- **Accuracy gate:** each vertex should include the OS-reported `accuracy` value; points above a threshold (e.g. 15m) are flagged or rejected. Requiring 5 stable consecutive fixes within 5m of each other before accepting a vertex reduces drift.
+- **Polygon validity:** minimum 3 vertices, closure within tolerance, no self-intersection — checked locally before saving.
+- **Battery:** continuous GPS drains low-end devices fast. A 2s duty-cycle (poll while capturing, suspend otherwise) cuts drain significantly.
 
-- `survey_response`
-- `response_node` (flat rows + `parent_node_id` for nested/repeating sections)
-- `attachment`
+## Testing strategy
 
-`SurveyRepositoryImpl` reconstructs the `ResponseNode` tree from `parent_node_id`. `getPendingSurveys()` returns only `PENDING` or `FAILED` items with `retryCount < MAX_SURVEY_RETRY` to avoid infinite retries.
+Fakes (`FakeSurveyApi`, `FakeNetworkMonitor`, `FakeFileSystem`) make every edge case deterministic. Tests cover: all-succeed, partial 500/400, timeout/IO early stop, empty queue, LowStorage preflight, attachment upload and deletion, fatal attachment error, partial attachment success, concurrent sync (Mutex), and exception mapping (every `Throwable` type → correct `SyncError`). The real SQLDelight driver is used in `SurveyRepositoryImplTest` to validate save, retrieve, status transitions, and retry counts against an in-memory database.
 
-## 5. Media Attachment Handling and Storage Management
+## One thing I'd do differently with more time
 
-Attachments are linked by `surveyId`. During sync:
+The engine processes surveys sequentially. On Wi-Fi with a full battery this leaves performance on the table. I would add a `Semaphore(N)`-bounded parallel upload path, selectable at construction time, while keeping sequential as the default. `SyncResult` already collects IDs independently of order, so no structural change is needed.
 
-- upload attachments after metadata
-- on success: mark UPLOADED
-- if `AUTO_DELETE_AFTER_UPLOAD` is enabled: delete local file to prevent storage growth
+## Future improvements
 
-Sync also stops early with `LowStorage` when free space is below `StoragePolicy.MIN_REQUIRED_FREE_SPACE_BYTES`.
-
-## 6. Network Monitoring Strategy
-
-`NetworkMonitor` is a shared abstraction. Android uses `ConnectivityManager`; iOS uses `NWPathMonitor`. The engine checks connectivity before uploads and maps runtime exceptions to `SyncError` to stop early on degraded networks.
-
-## 7. Testing Strategy
-
-Tests focus on deterministic sync behavior:
-
-- full success
-- partial failures (400/500)
-- timeout/IO early-stop (queue stops, remaining items not attempted)
-- low-storage preflight (no API calls)
-- attachments uploaded then deleted
-- concurrency (Mutex prevents double execution)
-
-Fakes (`FakeSurveyApi`, `FakeNetworkMonitor`, `FakeFileSystem`) make edge cases repeatable.
-
-## 8. Future Improvements
-
-Photo compression, scheduled background sync (WorkManager/BGTaskScheduler), richer diagnostics, and adaptive policies (battery/network type).
+WorkManager/BGTaskScheduler scheduling, and device-aware batch sizing (adapt concurrency based on network type and battery level). Sync progress is already exposed via `SurveySyncEngine.progress: StateFlow<SyncProgress?>` for a UI "Uploading 3 of 8…" indicator.
