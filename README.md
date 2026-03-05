@@ -1,4 +1,4 @@
-# Smart Agent - Staging
+# Smart Agent - Prod
 
 Smart Agent is a Kotlin Multiplatform (KMP) mobile application targeting **Android** and **iOS**.  
 Built with Compose Multiplatform for the UI layer and following an **MVI + offline-first** architecture with a single source of truth driven by a local SQLDelight database.
