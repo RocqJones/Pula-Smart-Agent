@@ -71,13 +71,38 @@
 
 ## GPS and geospatial challenges
 
-- Canopy and valley terrain in Sub-Saharan Africa can degrade GPS accuracy to 10–50m — boundaries may not close or may overlap adjacent fields
-- Each vertex should include the OS `accuracy` value; points above 15m are rejected
-- Five stable consecutive fixes within 5m are required before accepting a vertex
-- A polygon validity check (minimum 3 vertices, closed boundary, no self-intersection) runs locally before saving
-- A 2s poll duty-cycle avoids continuous GPS drain on low-end devices
+**Challenges:**
+- Tree cover and valleys degrade GPS accuracy to 10–50 m — boundaries may not close or overlap adjacent fields
+- Budget devices use basic GPS chips with no atmospheric error correction
+- Continuous GPS polling drains battery; agents may have no charging access for the rest of the day
+
+**Workable solution:**
+
+```
+GpsBoundaryCapture
+├── AccuracyGate      — drops any reading where accuracyMetres > 15 m (Constants.Gps.MAX_ACCURACY_METRES)
+├── StabilityBuffer   — collects 5 consecutive pings; accepts corner only when all cluster within 5 m
+│                       centroid computed via haversineMetres() in core/util/GeoUtils
+├── PolygonValidator  — rejects < 3 corners, collinear points (Shoelace area = 0), self-intersections
+└── FieldBoundary     — saved as (lat, lng, accuracyMetres, capturedAt) per corner + meanAccuracyMetres
+```
+
+- **AccuracyGate** — drops any fix with error radius > 15 m before it can become a corner
+- **StabilityBuffer** — waits for 5 pings clustering within 5 m; saves the centroid as the corner, not the first available reading
+- **PolygonValidator** — validates on-device before saving; rejects unclosed or self-crossing boundaries with a prompt to re-walk
+- **2-second ping interval** — halves battery drain vs. continuous polling with no accuracy loss at walking pace
+- Each corner stores its accuracy value so the backend can flag or re-request low-quality boundaries
 
 ## One thing I'd do differently with more time
 
 - Add `Semaphore(N)`-bounded parallel uploads, selectable at construction, for Wi-Fi conditions
 - `SyncResult` already collects IDs independently of order — only the loop strategy changes, no structural rewrite needed
+- Expose a `Flow<SyncProgress>` from `SurveySyncEngine` so the UI layer can show live upload progress (e.g. "Uploading 3 of 8") without polling the database
+
+## Blocked: Swift sync engine (async/await + actors)
+
+- Attempted as a bonus; PR open at **https://github.com/RocqJones/Pula-Smart-Agent/pull/10**
+- Blocked by KMM-to-Swift bridging issues: sealed subclasses not visible as Swift types, `KotlinThrowable` not conforming to Swift `Error`, and coroutine dispatchers not accessible from Swift
+- The Kotlin sync engine remains fully covered by `commonMain` unit tests on both platforms
+- With more time: add a thin Kotlin wrapper that re-exposes sealed subclasses via `@ObjCName` and a Swift-native `Error` enum mapping to `SyncError` to unblock the test suite
+

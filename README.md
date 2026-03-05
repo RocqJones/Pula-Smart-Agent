@@ -50,12 +50,16 @@ com.jonesmb.pulasmartagent
 │   │   ├── ResponseNode           # Sealed: Answer | RepeatingSection (arbitrary nesting)
 │   │   ├── Attachment             # Photo/file with upload lifecycle (retryCount, lastError)
 │   │   ├── SyncResult             # Outcome of one sync run (succeededIds, failedIds, stoppedReason)
+│   │   ├── GpsCoordinate          # Single GPS reading: lat, lng, accuracyMetres, capturedAt
+│   │   ├── FieldBoundary          # Validated polygon: ordered corners + meanAccuracyMetres
 │   │   └── status/
 │   │       ├── SyncStatus         # PENDING | IN_PROGRESS | SYNCED | FAILED
 │   │       └── AttachmentUploadStatus  # PENDING | UPLOADING | UPLOADED | FAILED
 │   ├── errors/
 │   │   └── SyncError              # Sealed: NoInternet | Timeout | ServerError(code) | SerializationError | Unknown
 │   │                              # Each variant carries isRetriable: Boolean
+│   ├── gps/
+│   │   └── GpsBoundaryCapture     # AccuracyGate → StabilityBuffer → PolygonValidator → FieldBoundary
 │   └── repository/
 │       ├── SurveyRepository       # Interface: save, getPending, markSynced/Failed, retry ops
 │       └── AttachmentRepository   # Interface: markUploaded/Failed, incrementRetry, getUploaded
@@ -84,11 +88,14 @@ com.jonesmb.pulasmartagent
 ├── core/                          # Cross-cutting utilities with no domain dependencies
 │   ├── constants/
 │   │   ├── Constants              # NODE_TYPE_ANSWER, NODE_TYPE_REPEATING_SECTION
+│   │   │                          # Constants.Gps: MAX_ACCURACY_METRES, STABILITY_WINDOW_SIZE, CLUSTER_RADIUS_METRES
 │   │   └── StoragePolicy          # MIN_REQUIRED_FREE_SPACE_BYTES, MAX_SURVEY_RETRY,
 │   │                              # MAX_ATTACHMENT_RETRY, AUTO_DELETE_AFTER_UPLOAD
 │   ├── extensions/
 │   │   ├── ExceptionMapper        # Throwable.toSyncError(): maps IOException/Timeout/HttpException → SyncError
 │   │   └── SyncErrorExt           # SyncError.toDbString() for persistence
+│   ├── util/
+│   │   └── GeoUtils               # haversineMetres(): straight-line distance in metres (Haversine, pure Kotlin)
 │   └── network/
 │       ├── HttpException          # Platform-agnostic HTTP error carrying response code
 │       ├── SyncErrorException     # Bridges typed SyncError into Throwable for Result.failure
@@ -151,6 +158,7 @@ sync()
 | Test file | Covers |
 |---|---|
 | `SurveySyncEngineTest` | 16 scenarios: all-succeed, partial 500/400, timeout/IOException early stop, concurrent mutex, LowStorage pre-flight, attachment upload + delete, retriable/fatal attachment errors, partial attachment success |
+| `GpsBoundaryCaptureTest` | 16 scenarios: AccuracyGate accept/reject, StabilityBuffer window fill / spread rejection / centroid average, PolygonValidator triangle / collinear / self-intersection, full end-to-end capture flow, noisy-ping isolation, meanAccuracyMetres averaging, haversineMetres distance |
 | `SyncErrorTest` | `isRetriable` correctness for every `SyncError` variant |
 | `SurveyResponseTest` | Domain model construction and node tree |
 | `SyncResultTest` | `SyncStopReason` variants |
