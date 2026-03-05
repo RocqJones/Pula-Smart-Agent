@@ -120,6 +120,36 @@ class SurveySyncEngineTest {
     }
 
     @Test
+    fun `timeout on 3rd survey stops sync, s4 and s5 never attempted`() = runTest {
+        val surveys = (1..5).map { survey("s$it") }
+        var uploadCallCount = 0
+        val api = FakeSurveyApi(surveyBehavior = { call ->
+            uploadCallCount++
+            when (call) {
+                0, 1 -> FakeApiResponse.Success
+                else -> FakeApiResponse.Timeout
+            }
+        })
+        val h = engine(surveys, api)
+
+        val result = h.engine.sync()
+
+        // stop reason
+        assertEquals(SyncStopReason.NetworkLost, result.stoppedReason)
+        // only 3 upload attempts — s4 and s5 were never reached
+        assertEquals(3, uploadCallCount)
+        // s1 and s2 fully synced
+        assertEquals(listOf("s1", "s2"), result.succeededIds)
+        assertEquals(2, h.repo.synced.size)
+        // s3 marked failed
+        assertEquals(listOf("s3"), result.failedIds)
+        assertTrue(h.repo.failed.any { it.first == "s3" })
+        // s4 and s5 untouched — not in failed, not in synced
+        assertTrue(result.failedIds.none { it == "s4" || it == "s5" })
+        assertTrue(h.repo.synced.none { it == "s4" || it == "s5" })
+    }
+
+    @Test
     fun `IOException stops sync early with NetworkLost`() = runTest {
         val surveys = (1..3).map { survey("s$it") }
         val api = FakeSurveyApi(surveyBehavior = { call ->
