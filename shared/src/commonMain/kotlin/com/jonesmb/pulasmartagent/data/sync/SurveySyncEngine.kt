@@ -40,7 +40,7 @@ class SurveySyncEngine(
             val pending = repository.getPendingSurveys()
 
             for (survey in pending) {
-                if (!networkMonitor.isConnected) {
+                if (!networkMonitor.isConnected()) {
                     failed.add(survey.id)
                     stopReason = SyncStopReason.NetworkLost
                     break

@@ -99,8 +99,12 @@ class SurveyResponseTest {
                 ),
             ),
             attachments = listOf(
-                Attachment("a1", "survey-001", "/img/field1.jpg", 102_400L, Instant.parse("2026-03-04T08:00:00Z"), AttachmentUploadStatus.PENDING, 0, null),
-            ),
+                Attachment(
+                    "a1", "survey-001", "/img/field1.jpg",
+                    102_400L, Instant.parse("2026-03-04T08:00:00Z"
+                    ), AttachmentUploadStatus.PENDING, 0, null
+                )
+            )
         )
 
         assertEquals(2, response.nodes.size)
