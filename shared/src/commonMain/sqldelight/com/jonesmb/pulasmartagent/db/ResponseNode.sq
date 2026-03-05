@@ -1,0 +1,25 @@
+CREATE TABLE response_node (
+    id             TEXT NOT NULL PRIMARY KEY,
+    survey_id      TEXT NOT NULL,
+    parent_node_id TEXT,
+    type           TEXT NOT NULL,
+    question_id    TEXT,
+    answer         TEXT,
+    section_id     TEXT,
+
+    FOREIGN KEY (survey_id)      REFERENCES survey_response(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_node_id) REFERENCES response_node(id)   ON DELETE CASCADE
+);
+
+CREATE INDEX idx_response_node_survey_id
+    ON response_node(survey_id);
+
+CREATE INDEX idx_response_node_parent
+    ON response_node(parent_node_id);
+
+insert:
+INSERT OR REPLACE INTO response_node(id, survey_id, parent_node_id, type, question_id, answer, section_id)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+selectBySurveyId:
+SELECT * FROM response_node WHERE survey_id = ? ORDER BY rowid ASC;
