@@ -278,6 +278,26 @@ class SurveySyncEngineTest {
     }
 
     @Test
+    fun `uploaded attachment is deleted from filesystem when AUTO_DELETE_AFTER_UPLOAD is true`() = runTest {
+        val att = attachment("att-delete", "s1")
+        val surveys = listOf(survey("s1", attachments = listOf(att)))
+        val h = engine(surveys, FakeSurveyApi(
+            surveyBehavior = { FakeApiResponse.Success },
+            attachmentBehavior = { FakeApiResponse.Success },
+        ))
+
+        // file exists before sync
+        assertTrue(h.fs.exists(att.localPath))
+
+        h.engine.sync()
+
+        // delete() was called with the exact local path
+        assertTrue(h.fs.deleted.contains(att.localPath))
+        // file no longer exists after sync
+        assertTrue(!h.fs.exists(att.localPath))
+    }
+
+    @Test
     fun `attachments are uploaded after survey metadata and marked as uploaded`() = runTest {
         val att = attachment("att-1", "s1")
         val surveys = listOf(survey("s1", attachments = listOf(att)))
