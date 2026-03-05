@@ -81,3 +81,12 @@
 
 - Add `Semaphore(N)`-bounded parallel uploads, selectable at construction, for Wi-Fi conditions
 - `SyncResult` already collects IDs independently of order — only the loop strategy changes, no structural rewrite needed
+- Expose a `Flow<SyncProgress>` from `SurveySyncEngine` so the UI layer can show live upload progress (e.g. "Uploading 3 of 8") without polling the database
+
+## Blocked: Swift sync engine (async/await + actors)
+
+- Attempted as a bonus; PR open at **https://github.com/RocqJones/Pula-Smart-Agent/pull/10**
+- Blocked by KMM-to-Swift bridging issues: sealed subclasses not visible as Swift types, `KotlinThrowable` not conforming to Swift `Error`, and coroutine dispatchers not accessible from Swift
+- The Kotlin sync engine remains fully covered by `commonMain` unit tests on both platforms
+- With more time: add a thin Kotlin wrapper that re-exposes sealed subclasses via `@ObjCName` and a Swift-native `Error` enum mapping to `SyncError` to unblock the test suite
+
