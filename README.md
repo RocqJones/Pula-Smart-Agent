@@ -167,6 +167,59 @@ Test infrastructure (all in `commonTest`):
 
 ---
 
+## Bonus — Swift async/await integration (`iosApp/iosApp/Sync/`)
+
+The iOS app consumes the **shared KMP `SurveySyncEngine` directly** via the `Shared.framework` the Kotlin/Native compiler produces. No logic is duplicated in Swift — domain models, retry policies, the mutex loop, and all platform actuals (`IosNetworkMonitor`, `IosFileSystem`, `NativeSqliteDriver`) already live in the shared module.
+
+The two Swift files added are:
+
+### `Sync/SurveyApiImpl.swift`
+The only piece that genuinely belongs on iOS — `URLSession`. Conforms to the KMP `SurveyApi` interface (exposed as an `@objc` protocol by Kotlin/Native). The shared `SurveySyncEngine` calls `uploadSurvey` / `uploadAttachment` through this implementation at runtime.
+
+### `Sync/SyncCoordinator.swift`
+A Swift `actor` that:
+1. Wires all iOS dependencies (`SurveyRepositoryImpl`, `AttachmentRepositoryImpl`, `IosNetworkMonitor`, `IosFileSystem`, `SurveyApiImpl`) into the shared `SurveySyncEngine`.
+2. Bridges `engine.sync()` — a Kotlin `suspend fun` — into Swift `async/await` via the completion-handler overload Kotlin/Native generates automatically.
+3. Converts the KMP `StateFlow<SyncProgress?>` into a Swift `AsyncStream<SyncProgress?>` using `FlowCollectorHelper` (see below), so a SwiftUI view can `for await` over live progress without touching coroutines.
+
+### `shared/src/iosMain/…/FlowCollectorHelper.kt`
+A small Kotlin helper in `iosMain` that launches a coroutine collector for `StateFlow<SyncProgress?>` and returns the `Job`. Swift calls it to attach/detach the `AsyncStream` bridge.
+
+### `SyncTests/SyncCoordinatorTests.swift`
+XCTest suite that injects Swift fakes — all conforming to the **same KMP interfaces** (`SurveyApi`, `SurveyRepository`, `AttachmentRepository`, `NetworkMonitor`, `FileSystem`) — directly into `SurveySyncEngine`. This verifies the wiring end-to-end on iOS without a server.
+
+### File layout
+
+```
+shared/src/iosMain/…/platform/flow/
+└── FlowCollectorHelper.kt      ← coroutine collector bridge for StateFlow → Swift AsyncStream
+
+iosApp/iosApp/
+├── Sync/
+│   ├── SurveyApiImpl.swift     ← URLSession impl of the KMP SurveyApi interface
+│   └── SyncCoordinator.swift   ← actor; wires KMP engine + bridges suspend → async/await
+└── SyncTests/
+    └── SyncCoordinatorTests.swift  ← XCTest; fakes conform to KMP interfaces directly
+```
+
+### How the pieces connect
+
+```
+SyncCoordinator (Swift actor)
+    │
+    ├── SurveySyncEngine (Kotlin, from Shared.framework)
+    │       ├── SurveyRepositoryImpl   (Kotlin, SQLDelight + NativeSqliteDriver)
+    │       ├── AttachmentRepositoryImpl (Kotlin, SQLDelight)
+    │       ├── IosNetworkMonitor      (Kotlin/iosMain, NWPathMonitor)
+    │       ├── IosFileSystem          (Kotlin/iosMain, NSFileManager)
+    │       └── SurveyApiImpl          ← only Swift file injected into KMP engine
+    │
+    └── FlowCollectorHelper (Kotlin/iosMain)
+            └── StateFlow<SyncProgress?> → AsyncStream<SyncProgress?>
+```
+
+---
+
 ## Branching strategy
 
 We use an explicit promotion pipeline to keep releases predictable:
