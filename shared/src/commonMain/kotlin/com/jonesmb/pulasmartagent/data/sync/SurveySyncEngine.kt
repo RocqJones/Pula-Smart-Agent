@@ -100,20 +100,22 @@ class SurveySyncEngine(
             val stop = result.fold(
                 onSuccess = {
                     attachmentRepository.markAsUploaded(attachment.id)
-                    if (StoragePolicy.AUTO_DELETE_AFTER_UPLOAD) {
-                        fileSystem.delete(attachment.localPath)
-                    }
+                    if (StoragePolicy.AUTO_DELETE_AFTER_UPLOAD) fileSystem.delete(attachment.localPath)
                     null
                 },
                 onFailure = { throwable ->
                     val error = throwable.toSyncError()
                     attachmentRepository.markAsFailed(attachment.id, error)
-                    val stop = networkStopReasonFor(error)
-                    if (stop != null) {
-                        repository.markAsFailed(survey.id, error)
-                        failed.add(survey.id)
-                    } else {
-                        attachmentRetryPolicy(attachment.id, error)
+                    val stop = attachmentStopReasonFor(error)
+                    when {
+                        stop != null -> {
+                            repository.markAsFailed(survey.id, error)
+                            failed.add(survey.id)
+                        }
+                        else -> {
+                            // ServerError 500+: retriable — record and continue
+                            attachmentRepository.incrementRetry(attachment.id)
+                        }
                     }
                     stop
                 }
@@ -124,40 +126,30 @@ class SurveySyncEngine(
     }
 
     /**
-     * Applies the retry policy for a survey-level upload error and returns whether to stop sync.
-     *
-     * - IOException / Timeout           → NetworkLost  (stop)
-     * - ServerError 400-499             → pinRetryToMax (continue)
-     * - ServerError 500+ (retriable)    → incrementRetry (continue)
-     * - Unknown / SerializationError    → FatalError   (stop)
+     * Survey-level retry/stop policy:
+     * - IOException / Timeout   - NetworkLost  (stop)
+     * - ServerError 400-499     - pin retry to max, continue
+     * - ServerError 500+        - increment retry, continue
+     * - Unknown / Serialization - FatalError   (stop)
      */
-    private suspend fun applyRetryPolicy(id: String, error: SyncError): SyncStopReason? {
-        return when {
-            error == SyncError.NoInternet || error == SyncError.Timeout -> SyncStopReason.NetworkLost
-            error is SyncError.ServerError && error.code in 400..499 -> {
-                repository.pinRetryToMax(id)
-                null
-            }
-            error is SyncError.ServerError && error.code >= 500 -> {
-                repository.incrementRetry(id)
-                null
-            }
-            else -> SyncStopReason.FatalError
-        }
+    private suspend fun applyRetryPolicy(id: String, error: SyncError): SyncStopReason? = when (error) {
+        is SyncError.NoInternet, SyncError.Timeout -> SyncStopReason.NetworkLost
+        is SyncError.ServerError if error.code in 400..499 -> { repository.pinRetryToMax(id); null }
+        is SyncError.ServerError if error.code >= 500 -> { repository.incrementRetry(id); null }
+        else -> SyncStopReason.FatalError
     }
 
-    private suspend fun attachmentRetryPolicy(id: String, error: SyncError) {
-        when {
-            error is SyncError.ServerError && error.code in 400..499 ->
-                attachmentRepository.incrementRetry(id)
-            error.isRetriable ->
-                attachmentRepository.incrementRetry(id)
-        }
-    }
-
-    private fun networkStopReasonFor(error: SyncError): SyncStopReason? = when {
-        error == SyncError.NoInternet || error == SyncError.Timeout -> SyncStopReason.NetworkLost
-        !error.isRetriable && error !is SyncError.ServerError       -> SyncStopReason.FatalError
-        else                                                         -> null
+    /**
+     * Attachment-level stop policy:
+     * - NoInternet / Timeout   - NetworkLost  (stop)
+     * - ServerError 400-499    - FatalError   (stop — bad payload, pointless to retry)
+     * - ServerError 500+       - null         (retriable, continue)
+     * - Unknown / other fatal  - FatalError   (stop)
+     */
+    private fun attachmentStopReasonFor(error: SyncError): SyncStopReason? = when (error) {
+        is SyncError.NoInternet, SyncError.Timeout -> SyncStopReason.NetworkLost
+        is SyncError.ServerError if error.code in 400..499 -> SyncStopReason.FatalError
+        is SyncError.ServerError if error.code >= 500 -> null
+        else -> SyncStopReason.FatalError
     }
 }
