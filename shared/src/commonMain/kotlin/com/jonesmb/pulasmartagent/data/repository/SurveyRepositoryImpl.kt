@@ -12,6 +12,7 @@ import com.jonesmb.pulasmartagent.domain.model.SurveyResponse
 import com.jonesmb.pulasmartagent.domain.model.status.AttachmentUploadStatus
 import com.jonesmb.pulasmartagent.domain.model.status.SyncStatus
 import com.jonesmb.pulasmartagent.domain.repository.SurveyRepository
+import com.jonesmb.pulasmartagent.core.constants.StoragePolicy
 import com.jonesmb.pulasmartagent.core.constants.Constants.NODE_TYPE_ANSWER
 import com.jonesmb.pulasmartagent.core.constants.Constants.NODE_TYPE_REPEATING_SECTION
 import com.jonesmb.pulasmartagent.core.extensions.toDbString
@@ -83,6 +84,12 @@ class SurveyRepositoryImpl(driver: SqlDriver) : SurveyRepository {
     override suspend fun incrementRetry(id: String) = withContext(Dispatchers.Default) {
         db.transaction {
             surveyQueries.incrementRetry(id = id)
+        }
+    }
+
+    override suspend fun pinRetryToMax(id: String) = withContext(Dispatchers.Default) {
+        db.transaction {
+            surveyQueries.pinRetryToMax(retry_count = StoragePolicy.MAX_SURVEY_RETRY.toLong(), id = id)
         }
     }
 

@@ -28,3 +28,7 @@ UPDATE survey_response SET status = ?, last_error = ? WHERE id = ?;
 
 incrementRetry:
 UPDATE survey_response SET retry_count = retry_count + 1 WHERE id = ?;
+
+pinRetryToMax:
+UPDATE survey_response SET retry_count = ? WHERE id = ?;
+

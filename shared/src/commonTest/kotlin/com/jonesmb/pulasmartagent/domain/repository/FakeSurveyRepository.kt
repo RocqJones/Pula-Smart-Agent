@@ -11,6 +11,7 @@ class FakeSurveyRepository(
     val synced = mutableListOf<String>()
     val failed = mutableListOf<Pair<String, SyncError>>()
     val retried = mutableListOf<String>()
+    val pinnedRetry = mutableListOf<String>()
 
     override suspend fun saveSurvey(response: SurveyResponse) {
         surveys.add(response)
@@ -31,6 +32,10 @@ class FakeSurveyRepository(
 
     override suspend fun incrementRetry(id: String) {
         retried.add(id)
+    }
+
+    override suspend fun pinRetryToMax(id: String) {
+        pinnedRetry.add(id)
     }
 
     private fun updateStatus(id: String, status: SyncStatus) {

@@ -26,6 +26,7 @@ sealed class FakeApiResponse {
     data class ServerError(val code: Int = 500) : FakeApiResponse()
     data object Timeout : FakeApiResponse()
     data object NetworkLost : FakeApiResponse()
+    data object UnknownError : FakeApiResponse()
 }
 
 private fun FakeApiResponse.toResult(): Result<Unit> = when (this) {
@@ -33,4 +34,5 @@ private fun FakeApiResponse.toResult(): Result<Unit> = when (this) {
     is FakeApiResponse.ServerError  -> Result.failure(HttpException(code))
     is FakeApiResponse.Timeout      -> Result.failure(SyncErrorException(SyncError.Timeout))
     is FakeApiResponse.NetworkLost  -> Result.failure(SyncErrorException(SyncError.NoInternet))
+    is FakeApiResponse.UnknownError -> Result.failure(SyncErrorException(SyncError.Unknown))
 }

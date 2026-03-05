@@ -100,7 +100,7 @@ class SurveySyncEngineTest {
     }
 
     @Test
-    fun `timeout on 3rd survey stops early with FatalError`() = runTest {
+    fun `timeout stops sync early with NetworkLost`() = runTest {
         val surveys = (1..5).map { survey("s$it") }
         val api = FakeSurveyApi(surveyBehavior = { call ->
             when (call) {
@@ -114,9 +114,71 @@ class SurveySyncEngineTest {
 
         assertEquals(listOf("s1", "s2"), result.succeededIds)
         assertEquals(listOf("s3"), result.failedIds)
-        assertEquals(SyncStopReason.FatalError, result.stoppedReason)
+        assertEquals(SyncStopReason.NetworkLost, result.stoppedReason)
         assertEquals(2, h.repo.synced.size)
-        assertTrue(h.repo.retried.contains("s3"))
+    }
+
+    @Test
+    fun `IOException stops sync early with NetworkLost`() = runTest {
+        val surveys = (1..3).map { survey("s$it") }
+        val api = FakeSurveyApi(surveyBehavior = { call ->
+            if (call == 0) FakeApiResponse.Success else FakeApiResponse.NetworkLost
+        })
+        val h = engine(surveys, api)
+
+        val result = h.engine.sync()
+
+        assertEquals(listOf("s1"), result.succeededIds)
+        assertEquals(listOf("s2"), result.failedIds)
+        assertEquals(SyncStopReason.NetworkLost, result.stoppedReason)
+    }
+
+    @Test
+    fun `ServerError 500 marks failed and continues to next survey`() = runTest {
+        val surveys = (1..3).map { survey("s$it") }
+        val api = FakeSurveyApi(surveyBehavior = { call ->
+            if (call == 1) FakeApiResponse.ServerError(503) else FakeApiResponse.Success
+        })
+        val h = engine(surveys, api)
+
+        val result = h.engine.sync()
+
+        assertEquals(listOf("s1", "s3"), result.succeededIds)
+        assertEquals(listOf("s2"), result.failedIds)
+        assertNull(result.stoppedReason)
+        assertTrue(h.repo.retried.contains("s2"))
+    }
+
+    @Test
+    fun `ServerError 400 marks failed, pins retry to max, and continues`() = runTest {
+        val surveys = (1..3).map { survey("s$it") }
+        val api = FakeSurveyApi(surveyBehavior = { call ->
+            if (call == 1) FakeApiResponse.ServerError(422) else FakeApiResponse.Success
+        })
+        val h = engine(surveys, api)
+
+        val result = h.engine.sync()
+
+        assertEquals(listOf("s1", "s3"), result.succeededIds)
+        assertEquals(listOf("s2"), result.failedIds)
+        assertNull(result.stoppedReason)
+        assertTrue(h.repo.pinnedRetry.contains("s2"))
+        assertTrue(h.repo.retried.none { it == "s2" })
+    }
+
+    @Test
+    fun `unknown fatal error stops entire sync with FatalError`() = runTest {
+        val surveys = (1..3).map { survey("s$it") }
+        val api = FakeSurveyApi(surveyBehavior = { call ->
+            if (call == 1) FakeApiResponse.UnknownError else FakeApiResponse.Success
+        })
+        val h = engine(surveys, api)
+
+        val result = h.engine.sync()
+
+        assertEquals(listOf("s1"), result.succeededIds)
+        assertEquals(listOf("s2"), result.failedIds)
+        assertEquals(SyncStopReason.FatalError, result.stoppedReason)
     }
 
     @Test

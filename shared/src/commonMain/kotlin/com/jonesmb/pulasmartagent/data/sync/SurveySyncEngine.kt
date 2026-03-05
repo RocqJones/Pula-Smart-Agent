@@ -48,17 +48,7 @@ class SurveySyncEngine(
                 }
 
                 // Phase 1 — upload survey metadata
-                val metaResult = api.uploadSurvey(survey)
-                val metaStop = metaResult.fold(
-                    onSuccess = { null },
-                    onFailure = { throwable ->
-                        val error = throwable.toSyncError()
-                        repository.markAsFailed(survey.id, error)
-                        if (error.isRetriable) repository.incrementRetry(survey.id)
-                        failed.add(survey.id)
-                        stopReasonFor(error)
-                    }
-                )
+                val metaStop = uploadMeta(survey, failed)
                 if (metaStop != null) {
                     return@withContext SyncResult(succeeded, failed, metaStop)
                 }
@@ -77,7 +67,24 @@ class SurveySyncEngine(
         }
     }
 
-    // Returns a SyncStopReason if the caller should abort the entire sync, null to continue.
+    // Returns non-null SyncStopReason when the engine must abort; null means continue to next survey.
+    private suspend fun uploadMeta(
+        survey: SurveyResponse,
+        failed: MutableList<String>,
+    ): SyncStopReason? {
+        val result = api.uploadSurvey(survey)
+        return result.fold(
+            onSuccess = { null },
+            onFailure = { throwable ->
+                val error = throwable.toSyncError()
+                repository.markAsFailed(survey.id, error)
+                failed.add(survey.id)
+                applyRetryPolicy(survey.id, error)
+            }
+        )
+    }
+
+    // Returns non-null SyncStopReason when the engine must abort; null means continue to next survey.
     private suspend fun uploadAttachments(
         survey: SurveyResponse,
         failed: MutableList<String>,
@@ -90,33 +97,67 @@ class SurveySyncEngine(
             }
 
             val result = api.uploadAttachment(attachment)
-            result.fold(
+            val stop = result.fold(
                 onSuccess = {
                     attachmentRepository.markAsUploaded(attachment.id)
                     if (StoragePolicy.AUTO_DELETE_AFTER_UPLOAD) {
                         fileSystem.delete(attachment.localPath)
                     }
+                    null
                 },
                 onFailure = { throwable ->
                     val error = throwable.toSyncError()
                     attachmentRepository.markAsFailed(attachment.id, error)
-                    if (error.isRetriable) attachmentRepository.incrementRetry(attachment.id)
-                    val stop = stopReasonFor(error)
+                    val stop = networkStopReasonFor(error)
                     if (stop != null) {
                         repository.markAsFailed(survey.id, error)
                         failed.add(survey.id)
-                        return stop
+                    } else {
+                        attachmentRetryPolicy(attachment.id, error)
                     }
+                    stop
                 }
             )
+            if (stop != null) return stop
         }
         return null
     }
 
-    private fun stopReasonFor(error: SyncError): SyncStopReason? = when {
-        error == SyncError.NoInternet -> SyncStopReason.NetworkLost
-        error == SyncError.Timeout    -> SyncStopReason.FatalError
-        !error.isRetriable            -> SyncStopReason.FatalError
-        else                          -> null
+    /**
+     * Applies the retry policy for a survey-level upload error and returns whether to stop sync.
+     *
+     * - IOException / Timeout           → NetworkLost  (stop)
+     * - ServerError 400-499             → pinRetryToMax (continue)
+     * - ServerError 500+ (retriable)    → incrementRetry (continue)
+     * - Unknown / SerializationError    → FatalError   (stop)
+     */
+    private suspend fun applyRetryPolicy(id: String, error: SyncError): SyncStopReason? {
+        return when {
+            error == SyncError.NoInternet || error == SyncError.Timeout -> SyncStopReason.NetworkLost
+            error is SyncError.ServerError && error.code in 400..499 -> {
+                repository.pinRetryToMax(id)
+                null
+            }
+            error is SyncError.ServerError && error.code >= 500 -> {
+                repository.incrementRetry(id)
+                null
+            }
+            else -> SyncStopReason.FatalError
+        }
+    }
+
+    private suspend fun attachmentRetryPolicy(id: String, error: SyncError) {
+        when {
+            error is SyncError.ServerError && error.code in 400..499 ->
+                attachmentRepository.incrementRetry(id)
+            error.isRetriable ->
+                attachmentRepository.incrementRetry(id)
+        }
+    }
+
+    private fun networkStopReasonFor(error: SyncError): SyncStopReason? = when {
+        error == SyncError.NoInternet || error == SyncError.Timeout -> SyncStopReason.NetworkLost
+        !error.isRetriable && error !is SyncError.ServerError       -> SyncStopReason.FatalError
+        else                                                         -> null
     }
 }
