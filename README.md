@@ -165,3 +165,43 @@ Test infrastructure (all in `commonTest`):
 | `FakeNetworkMonitor` | Fixed `isConnected` boolean |
 | `FakeFileSystem` | Records `deleted` paths; `exists()` returns false for deleted paths |
 
+---
+
+## Branching strategy
+
+We use an explicit promotion pipeline to keep releases predictable:
+
+- All fixes and feature PRs merge into `dev`
+- Promote to staging via a bridge branch: `deploy/dev-to-staging` → merge into `staging`
+- Promote to production via a bridge branch: `deploy/staging-to-prod` → merge into `prod`
+
+Illustration:
+
+```text
+feature/*   fix/*
+   \         /
+    \       /
+     v     v
+      dev
+       |
+       |  (bridge)
+       v
+deploy/dev-to-staging  --->  staging
+                               |
+                               |  (bridge)
+                               v
+                     deploy/staging-to-prod  --->  prod
+```
+
+### Versioning
+
+We use SemVer-style versions: `MAJOR.MINOR.PATCH`.
+
+- `dev` may include a pre-release suffix (e.g. `1.0.1-dev`).
+- `staging` uses a staging suffix (e.g. `1.0.1-staging`) when doing release verification.
+- `prod` uses the clean release version (e.g. `1.0.1`).
+
+Build numbers must be monotonically increasing per platform:
+
+- Android: increment `versionCode` for every staged/prod build.
+- iOS: increment `CURRENT_PROJECT_VERSION` for every staged/prod build; keep `MARKETING_VERSION` in sync with Android’s `versionName`.
