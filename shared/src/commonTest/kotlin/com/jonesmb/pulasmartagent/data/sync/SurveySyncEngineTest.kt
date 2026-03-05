@@ -1,13 +1,17 @@
 package com.jonesmb.pulasmartagent.data.sync
 
+import com.jonesmb.pulasmartagent.core.constants.StoragePolicy
 import com.jonesmb.pulasmartagent.data.network.FakeApiResponse
 import com.jonesmb.pulasmartagent.data.network.FakeSurveyApi
 import com.jonesmb.pulasmartagent.domain.model.Attachment
 import com.jonesmb.pulasmartagent.domain.model.ResponseNode
 import com.jonesmb.pulasmartagent.domain.model.SyncStopReason
 import com.jonesmb.pulasmartagent.domain.model.SurveyResponse
+import com.jonesmb.pulasmartagent.domain.model.status.AttachmentUploadStatus
 import com.jonesmb.pulasmartagent.domain.model.status.SyncStatus
+import com.jonesmb.pulasmartagent.domain.repository.FakeAttachmentRepository
 import com.jonesmb.pulasmartagent.domain.repository.FakeSurveyRepository
+import com.jonesmb.pulasmartagent.platform.filesystem.FakeFileSystem
 import com.jonesmb.pulasmartagent.platform.network.FakeNetworkMonitor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -20,84 +24,199 @@ import kotlin.test.assertTrue
 
 class SurveySyncEngineTest {
 
-    // helpers
-    private fun survey(id: String) = SurveyResponse(
+    private fun attachment(id: String, surveyId: String = "s1") = Attachment(
+        id = id,
+        surveyId = surveyId,
+        localPath = "/data/$id.jpg",
+        sizeBytes = 1024L,
+        createdAt = Instant.parse("2026-03-04T08:00:00Z"),
+        uploadStatus = AttachmentUploadStatus.PENDING,
+        retryCount = 0,
+        lastError = null,
+    )
+
+    private fun survey(id: String, attachments: List<Attachment> = emptyList()) = SurveyResponse(
         id = id,
         farmerId = "farmer-1",
         createdAt = Instant.parse("2026-03-04T08:00:00Z"),
         status = SyncStatus.PENDING,
         retryCount = 0,
         nodes = emptyList<ResponseNode>(),
-        attachments = emptyList<Attachment>(),
+        attachments = attachments,
+    )
+
+    private data class Harness(
+        val engine: SurveySyncEngine,
+        val repo: FakeSurveyRepository,
+        val attachmentRepo: FakeAttachmentRepository,
+        val fs: FakeFileSystem,
     )
 
     private fun engine(
         surveys: List<SurveyResponse>,
         api: FakeSurveyApi,
         connected: Boolean = true,
-    ): Pair<SurveySyncEngine, FakeSurveyRepository> {
+        availableStorageBytes: Long = Long.MAX_VALUE,
+    ): Harness {
         val repo = FakeSurveyRepository(surveys.toMutableList())
+        val attachmentRepo = FakeAttachmentRepository()
         val monitor = FakeNetworkMonitor(connected)
-        return SurveySyncEngine(repo, api, monitor, Dispatchers.Unconfined) to repo
+        val fs = FakeFileSystem(availableStorageBytes)
+        return Harness(
+            SurveySyncEngine(repo, attachmentRepo, api, monitor, fs, Dispatchers.Unconfined),
+            repo,
+            attachmentRepo,
+            fs,
+        )
     }
 
-    // tests
     @Test
     fun `all surveys succeed`() = runTest {
         val surveys = (1..5).map { survey("s$it") }
-        val (eng, repo) = engine(surveys, FakeSurveyApi { FakeApiResponse.Success })
+        val h = engine(surveys, FakeSurveyApi(surveyBehavior = { FakeApiResponse.Success }))
 
-        val result = eng.sync()
+        val result = h.engine.sync()
 
         assertEquals(listOf("s1", "s2", "s3", "s4", "s5"), result.succeededIds)
         assertTrue(result.failedIds.isEmpty())
         assertNull(result.stoppedReason)
-        assertEquals(5, repo.synced.size)
-        assertTrue(repo.failed.isEmpty())
+        assertEquals(5, h.repo.synced.size)
     }
 
     @Test
     fun `6th survey fails with 500, first 5 succeed`() = runTest {
         val surveys = (1..8).map { survey("s$it") }
-        val api = FakeSurveyApi { call ->
+        val api = FakeSurveyApi(surveyBehavior = { call ->
             if (call < 5) FakeApiResponse.Success else FakeApiResponse.ServerError(500)
-        }
-        val (eng, repo) = engine(surveys, api)
+        })
+        val h = engine(surveys, api)
 
-        val result = eng.sync()
+        val result = h.engine.sync()
 
         assertEquals(listOf("s1", "s2", "s3", "s4", "s5"), result.succeededIds)
         assertTrue("s6" in result.failedIds)
-        assertEquals(5, repo.synced.size)
-        assertTrue(repo.failed.any { it.first == "s6" })
-        assertTrue(repo.retried.contains("s6"))
+        assertEquals(5, h.repo.synced.size)
+        assertTrue(h.repo.failed.any { it.first == "s6" })
+        assertTrue(h.repo.retried.contains("s6"))
     }
 
     @Test
-    fun `timeout on 3rd survey stops early with FatalError`() = runTest {
+    fun `timeout stops sync early with NetworkLost`() = runTest {
         val surveys = (1..5).map { survey("s$it") }
-        val api = FakeSurveyApi { call ->
+        val api = FakeSurveyApi(surveyBehavior = { call ->
             when (call) {
                 0, 1 -> FakeApiResponse.Success
                 else -> FakeApiResponse.Timeout
             }
-        }
-        val (eng, repo) = engine(surveys, api)
+        })
+        val h = engine(surveys, api)
 
-        val result = eng.sync()
+        val result = h.engine.sync()
 
         assertEquals(listOf("s1", "s2"), result.succeededIds)
         assertEquals(listOf("s3"), result.failedIds)
+        assertEquals(SyncStopReason.NetworkLost, result.stoppedReason)
+        assertEquals(2, h.repo.synced.size)
+    }
+
+    @Test
+    fun `timeout on 3rd survey stops sync, s4 and s5 never attempted`() = runTest {
+        val surveys = (1..5).map { survey("s$it") }
+        var uploadCallCount = 0
+        val api = FakeSurveyApi(surveyBehavior = { call ->
+            uploadCallCount++
+            when (call) {
+                0, 1 -> FakeApiResponse.Success
+                else -> FakeApiResponse.Timeout
+            }
+        })
+        val h = engine(surveys, api)
+
+        val result = h.engine.sync()
+
+        // stop reason
+        assertEquals(SyncStopReason.NetworkLost, result.stoppedReason)
+        // only 3 upload attempts — s4 and s5 were never reached
+        assertEquals(3, uploadCallCount)
+        // s1 and s2 fully synced
+        assertEquals(listOf("s1", "s2"), result.succeededIds)
+        assertEquals(2, h.repo.synced.size)
+        // s3 marked failed
+        assertEquals(listOf("s3"), result.failedIds)
+        assertTrue(h.repo.failed.any { it.first == "s3" })
+        // s4 and s5 untouched — not in failed, not in synced
+        assertTrue(result.failedIds.none { it == "s4" || it == "s5" })
+        assertTrue(h.repo.synced.none { it == "s4" || it == "s5" })
+    }
+
+    @Test
+    fun `IOException stops sync early with NetworkLost`() = runTest {
+        val surveys = (1..3).map { survey("s$it") }
+        val api = FakeSurveyApi(surveyBehavior = { call ->
+            if (call == 0) FakeApiResponse.Success else FakeApiResponse.NetworkLost
+        })
+        val h = engine(surveys, api)
+
+        val result = h.engine.sync()
+
+        assertEquals(listOf("s1"), result.succeededIds)
+        assertEquals(listOf("s2"), result.failedIds)
+        assertEquals(SyncStopReason.NetworkLost, result.stoppedReason)
+    }
+
+    @Test
+    fun `ServerError 500 marks failed and continues to next survey`() = runTest {
+        val surveys = (1..3).map { survey("s$it") }
+        val api = FakeSurveyApi(surveyBehavior = { call ->
+            if (call == 1) FakeApiResponse.ServerError(503) else FakeApiResponse.Success
+        })
+        val h = engine(surveys, api)
+
+        val result = h.engine.sync()
+
+        assertEquals(listOf("s1", "s3"), result.succeededIds)
+        assertEquals(listOf("s2"), result.failedIds)
+        assertNull(result.stoppedReason)
+        assertTrue(h.repo.retried.contains("s2"))
+    }
+
+    @Test
+    fun `ServerError 400 marks failed, pins retry to max, and continues`() = runTest {
+        val surveys = (1..3).map { survey("s$it") }
+        val api = FakeSurveyApi(surveyBehavior = { call ->
+            if (call == 1) FakeApiResponse.ServerError(422) else FakeApiResponse.Success
+        })
+        val h = engine(surveys, api)
+
+        val result = h.engine.sync()
+
+        assertEquals(listOf("s1", "s3"), result.succeededIds)
+        assertEquals(listOf("s2"), result.failedIds)
+        assertNull(result.stoppedReason)
+        assertTrue(h.repo.pinnedRetry.contains("s2"))
+        assertTrue(h.repo.retried.none { it == "s2" })
+    }
+
+    @Test
+    fun `unknown fatal error stops entire sync with FatalError`() = runTest {
+        val surveys = (1..3).map { survey("s$it") }
+        val api = FakeSurveyApi(surveyBehavior = { call ->
+            if (call == 1) FakeApiResponse.UnknownError else FakeApiResponse.Success
+        })
+        val h = engine(surveys, api)
+
+        val result = h.engine.sync()
+
+        assertEquals(listOf("s1"), result.succeededIds)
+        assertEquals(listOf("s2"), result.failedIds)
         assertEquals(SyncStopReason.FatalError, result.stoppedReason)
-        assertEquals(2, repo.synced.size)
-        assertTrue(repo.retried.contains("s3"))
     }
 
     @Test
     fun `empty queue returns empty result with no stop reason`() = runTest {
-        val (eng, _) = engine(emptyList(), FakeSurveyApi { FakeApiResponse.Success })
+        val h = engine(emptyList(), FakeSurveyApi(surveyBehavior = { FakeApiResponse.Success }))
 
-        val result = eng.sync()
+        val result = h.engine.sync()
 
         assertTrue(result.succeededIds.isEmpty())
         assertTrue(result.failedIds.isEmpty())
@@ -108,21 +227,156 @@ class SurveySyncEngineTest {
     fun `concurrent sync calls do not double-execute`() = runTest {
         val surveys = (1..4).map { survey("s$it") }
         var uploadCount = 0
-        val api = FakeSurveyApi { uploadCount++; FakeApiResponse.Success }
-        val (eng, _) = engine(surveys, api)
+        val api = FakeSurveyApi(surveyBehavior = { uploadCount++; FakeApiResponse.Success })
+        val h = engine(surveys, api)
 
-        val first = async { eng.sync() }
-        val second = async { eng.sync() }
+        val first = async { h.engine.sync() }
+        val second = async { h.engine.sync() }
 
         val r1 = first.await()
         val r2 = second.await()
 
-        // Total uploads must equal exactly the number of surveys - no survey uploaded twice
         assertEquals(4, uploadCount)
-
-        // One coroutine got all 4, the other saw an empty queue (already processed)
         val combined = r1.succeededIds + r2.succeededIds
         assertEquals(4, combined.size)
         assertTrue(r1.failedIds.isEmpty() && r2.failedIds.isEmpty())
+    }
+
+    @Test
+    fun `sync stops immediately with LowStorage when available bytes below threshold`() = runTest {
+        val surveys = (1..3).map { survey("s$it") }
+        val h = engine(
+            surveys,
+            FakeSurveyApi(surveyBehavior = { FakeApiResponse.Success }),
+            availableStorageBytes = 10 * 1024 * 1024L,
+        )
+
+        val result = h.engine.sync()
+
+        assertEquals(SyncStopReason.LowStorage, result.stoppedReason)
+        assertTrue(result.succeededIds.isEmpty())
+        assertTrue(result.failedIds.isEmpty())
+        assertTrue(h.repo.synced.isEmpty())
+    }
+
+    @Test
+    fun `low storage stops sync before any API call is made`() = runTest {
+        var uploadCallCount = 0
+        val api = FakeSurveyApi(surveyBehavior = { uploadCallCount++; FakeApiResponse.Success })
+        val h = engine(
+            surveys = (1..3).map { survey("s$it") },
+            api = api,
+            availableStorageBytes = StoragePolicy.MIN_REQUIRED_FREE_SPACE_BYTES - 1,
+        )
+
+        val result = h.engine.sync()
+
+        assertEquals(SyncStopReason.LowStorage, result.stoppedReason)
+        assertEquals(0, uploadCallCount)
+        assertTrue(result.succeededIds.isEmpty())
+        assertTrue(result.failedIds.isEmpty())
+    }
+
+    @Test
+    fun `uploaded attachment is deleted from filesystem when AUTO_DELETE_AFTER_UPLOAD is true`() = runTest {
+        val att = attachment("att-delete", "s1")
+        val surveys = listOf(survey("s1", attachments = listOf(att)))
+        val h = engine(surveys, FakeSurveyApi(
+            surveyBehavior = { FakeApiResponse.Success },
+            attachmentBehavior = { FakeApiResponse.Success },
+        ))
+
+        // file exists before sync
+        assertTrue(h.fs.exists(att.localPath))
+
+        h.engine.sync()
+
+        // delete() was called with the exact local path
+        assertTrue(h.fs.deleted.contains(att.localPath))
+        // file no longer exists after sync
+        assertTrue(!h.fs.exists(att.localPath))
+    }
+
+    @Test
+    fun `attachments are uploaded after survey metadata and marked as uploaded`() = runTest {
+        val att = attachment("att-1", "s1")
+        val surveys = listOf(survey("s1", attachments = listOf(att)))
+        val h = engine(surveys, FakeSurveyApi(
+            surveyBehavior = { FakeApiResponse.Success },
+            attachmentBehavior = { FakeApiResponse.Success },
+        ))
+
+        val result = h.engine.sync()
+
+        assertEquals(listOf("s1"), result.succeededIds)
+        assertNull(result.stoppedReason)
+        assertTrue(h.attachmentRepo.uploaded.contains("att-1"))
+        assertTrue(h.fs.deleted.contains(att.localPath))
+    }
+
+    @Test
+    fun `retriable attachment error increments retry but continues to next survey`() = runTest {
+        val att = attachment("att-1", "s1")
+        val surveys = listOf(survey("s1", attachments = listOf(att)), survey("s2"))
+        val h = engine(surveys, FakeSurveyApi(
+            surveyBehavior = { FakeApiResponse.Success },
+            attachmentBehavior = { FakeApiResponse.ServerError(503) },
+        ))
+
+        h.engine.sync()
+        assertTrue(h.attachmentRepo.failed.any { it.first == "att-1" })
+        // s1 failed due to attachment, but s2 (no attachments) may still proceed
+    }
+
+    @Test
+    fun `network lost during attachment upload stops entire sync`() = runTest {
+        val att = attachment("att-1", "s1")
+        val surveys = listOf(survey("s1", attachments = listOf(att)), survey("s2"))
+        val h = engine(surveys, FakeSurveyApi(
+            surveyBehavior = { FakeApiResponse.Success },
+            attachmentBehavior = { FakeApiResponse.NetworkLost },
+        ))
+
+        val result = h.engine.sync()
+
+        assertEquals(SyncStopReason.NetworkLost, result.stoppedReason)
+        assertTrue("s1" in result.failedIds)
+        assertTrue(result.succeededIds.isEmpty())
+    }
+
+    @Test
+    fun `fatal attachment error marks survey failed and stops sync`() = runTest {
+        val att = attachment("att-1", "s1")
+        val surveys = listOf(survey("s1", attachments = listOf(att)), survey("s2"))
+        val h = engine(surveys, FakeSurveyApi(
+            surveyBehavior = { FakeApiResponse.Success },
+            attachmentBehavior = { FakeApiResponse.ServerError(400) },
+        ))
+
+        val result = h.engine.sync()
+
+        assertEquals(SyncStopReason.FatalError, result.stoppedReason)
+        assertTrue("s1" in result.failedIds)
+        assertTrue(h.repo.failed.any { it.first == "s1" })
+        assertTrue(result.succeededIds.isEmpty())
+    }
+
+    @Test
+    fun `partial attachment success persists before stop`() = runTest {
+        val att1 = attachment("att-1", "s1")
+        val att2 = attachment("att-2", "s1")
+        val surveys = listOf(survey("s1", attachments = listOf(att1, att2)))
+        var attachCall = 0
+        val h = engine(surveys, FakeSurveyApi(
+            surveyBehavior = { FakeApiResponse.Success },
+            attachmentBehavior = { if (attachCall++ == 0) FakeApiResponse.Success else FakeApiResponse.ServerError(400) },
+        ))
+
+        h.engine.sync()
+
+        // att-1 was uploaded and persisted before att-2 caused a fatal stop
+        assertTrue(h.attachmentRepo.uploaded.contains("att-1"))
+        assertTrue(h.fs.deleted.contains(att1.localPath))
+        assertTrue(h.attachmentRepo.failed.any { it.first == "att-2" })
     }
 }

@@ -1,6 +1,5 @@
 package com.jonesmb.pulasmartagent.platform.network
 
 interface NetworkMonitor {
-    val isConnected: Boolean
+    suspend fun isConnected(): Boolean
 }
-

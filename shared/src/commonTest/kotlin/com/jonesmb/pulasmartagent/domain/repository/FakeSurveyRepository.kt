@@ -1,5 +1,6 @@
 package com.jonesmb.pulasmartagent.domain.repository
 
+import com.jonesmb.pulasmartagent.core.constants.StoragePolicy
 import com.jonesmb.pulasmartagent.domain.errors.SyncError
 import com.jonesmb.pulasmartagent.domain.model.SurveyResponse
 import com.jonesmb.pulasmartagent.domain.model.status.SyncStatus
@@ -11,13 +12,17 @@ class FakeSurveyRepository(
     val synced = mutableListOf<String>()
     val failed = mutableListOf<Pair<String, SyncError>>()
     val retried = mutableListOf<String>()
+    val pinnedRetry = mutableListOf<String>()
 
     override suspend fun saveSurvey(response: SurveyResponse) {
         surveys.add(response)
     }
 
     override suspend fun getPendingSurveys(): List<SurveyResponse> =
-        surveys.filter { it.status == SyncStatus.PENDING }
+        surveys.filter {
+            (it.status == SyncStatus.PENDING || it.status == SyncStatus.FAILED)
+                && it.retryCount < StoragePolicy.MAX_SURVEY_RETRY
+        }
 
     override suspend fun markAsSynced(id: String) {
         synced.add(id)
@@ -31,6 +36,10 @@ class FakeSurveyRepository(
 
     override suspend fun incrementRetry(id: String) {
         retried.add(id)
+    }
+
+    override suspend fun pinRetryToMax(id: String) {
+        pinnedRetry.add(id)
     }
 
     private fun updateStatus(id: String, status: SyncStatus) {

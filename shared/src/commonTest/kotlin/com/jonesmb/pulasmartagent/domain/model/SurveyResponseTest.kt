@@ -75,7 +75,11 @@ class SurveyResponseTest {
             id = "att-001",
             surveyId = "survey-001",
             localPath = "/data/user/0/images/photo.jpg",
+            sizeBytes = 204_800L,
+            createdAt = Instant.parse("2026-03-04T08:00:00Z"),
             uploadStatus = AttachmentUploadStatus.PENDING,
+            retryCount = 0,
+            lastError = null,
         )
         assertEquals(AttachmentUploadStatus.PENDING, attachment.uploadStatus)
         assertEquals("survey-001", attachment.surveyId)
@@ -95,8 +99,12 @@ class SurveyResponseTest {
                 ),
             ),
             attachments = listOf(
-                Attachment("a1", "survey-001", "/img/field1.jpg", AttachmentUploadStatus.PENDING),
-            ),
+                Attachment(
+                    "a1", "survey-001", "/img/field1.jpg",
+                    102_400L, Instant.parse("2026-03-04T08:00:00Z"
+                    ), AttachmentUploadStatus.PENDING, 0, null
+                )
+            )
         )
 
         assertEquals(2, response.nodes.size)

@@ -12,6 +12,7 @@ import com.jonesmb.pulasmartagent.domain.model.SurveyResponse
 import com.jonesmb.pulasmartagent.domain.model.status.AttachmentUploadStatus
 import com.jonesmb.pulasmartagent.domain.model.status.SyncStatus
 import com.jonesmb.pulasmartagent.domain.repository.SurveyRepository
+import com.jonesmb.pulasmartagent.core.constants.StoragePolicy
 import com.jonesmb.pulasmartagent.core.constants.Constants.NODE_TYPE_ANSWER
 import com.jonesmb.pulasmartagent.core.constants.Constants.NODE_TYPE_REPEATING_SECTION
 import com.jonesmb.pulasmartagent.core.extensions.toDbString
@@ -43,14 +44,18 @@ class SurveyRepositoryImpl(driver: SqlDriver) : SurveyRepository {
                     id = attachment.id,
                     survey_id = attachment.surveyId,
                     local_path = attachment.localPath,
+                    size_bytes = attachment.sizeBytes,
+                    created_at = attachment.createdAt.toEpochMilliseconds(),
                     upload_status = attachment.uploadStatus.name,
+                    retry_count = attachment.retryCount.toLong(),
+                    last_error = attachment.lastError,
                 )
             }
         }
     }
 
     override suspend fun getPendingSurveys(): List<SurveyResponse> = withContext(Dispatchers.Default) {
-        surveyQueries.selectPending().executeAsList().map { row ->
+        surveyQueries.selectPending(maxRetry = StoragePolicy.MAX_SURVEY_RETRY.toLong()).executeAsList().map { row ->
             val nodes = buildNodeTree(row.id)
             val attachments = attachmentQueries.selectBySurveyId(row.id).executeAsList().map {
                 it.toDomain()
@@ -79,6 +84,12 @@ class SurveyRepositoryImpl(driver: SqlDriver) : SurveyRepository {
     override suspend fun incrementRetry(id: String) = withContext(Dispatchers.Default) {
         db.transaction {
             surveyQueries.incrementRetry(id = id)
+        }
+    }
+
+    override suspend fun pinRetryToMax(id: String) = withContext(Dispatchers.Default) {
+        db.transaction {
+            surveyQueries.pinRetryToMax(retry_count = StoragePolicy.MAX_SURVEY_RETRY.toLong(), id = id)
         }
     }
 
@@ -147,7 +158,11 @@ class SurveyRepositoryImpl(driver: SqlDriver) : SurveyRepository {
         id = id,
         surveyId = survey_id,
         localPath = local_path,
+        sizeBytes = size_bytes,
+        createdAt = Instant.fromEpochMilliseconds(created_at),
         uploadStatus = AttachmentUploadStatus.valueOf(upload_status),
+        retryCount = retry_count.toInt(),
+        lastError = last_error,
     )
 
     /**

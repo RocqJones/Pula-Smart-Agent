@@ -15,7 +15,9 @@ INSERT OR REPLACE INTO survey_response(id, farmer_id, created_at, status, retry_
 VALUES (?, ?, ?, ?, ?, ?);
 
 selectPending:
-SELECT * FROM survey_response WHERE status = 'PENDING';
+SELECT * FROM survey_response
+WHERE (status = 'PENDING' OR status = 'FAILED')
+  AND retry_count < :maxRetry;
 
 selectById:
 SELECT * FROM survey_response WHERE id = ?;
@@ -28,3 +30,7 @@ UPDATE survey_response SET status = ?, last_error = ? WHERE id = ?;
 
 incrementRetry:
 UPDATE survey_response SET retry_count = retry_count + 1 WHERE id = ?;
+
+pinRetryToMax:
+UPDATE survey_response SET retry_count = ? WHERE id = ?;
+

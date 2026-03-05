@@ -12,4 +12,5 @@ interface SurveyRepository {
     suspend fun markAsSynced(id: String)
     suspend fun markAsFailed(id: String, error: SyncError)
     suspend fun incrementRetry(id: String)
+    suspend fun pinRetryToMax(id: String)
 }
