@@ -10,6 +10,7 @@
 		51205431A29DA53D62029625 /* Shared.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B9B255950D289ED6C31C369D /* Shared.framework */; };
 		526D43980E8FBD736BC1298D /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3751C1E4F93C54C15039231C /* Foundation.framework */; };
 		A942FE784E442FB02779773E /* SyncCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3381AE0AF9254A3902F7E1AA /* SyncCoordinatorTests.swift */; };
+		B1C3D4E5F6A7B8C9D0E1F2A3 /* KMPTestHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F6A7B8C9D0E1F2 /* KMPTestHelpers.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -24,10 +25,11 @@
 
 /* Begin PBXFileReference section */
 		3381AE0AF9254A3902F7E1AA /* SyncCoordinatorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SyncCoordinatorTests.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F6A7B8C9D0E1F2 /* KMPTestHelpers.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = KMPTestHelpers.swift; sourceTree = "<group>"; };
 		3751C1E4F93C54C15039231C /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
-		599A8E7DFF1C16099BD11BFF /* PulaSmartAgent.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PulaSmartAgent.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		599A8E7DFF1C16099BD11BFF /* iosAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = iosAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B9B0D97BF56125895673072E /* PulaSmartAgent.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = PulaSmartAgent.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		B9B255950D289ED6C31C369D /* Shared.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Shared.framework; path = "$(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)/Shared.framework"; sourceTree = "<group>"; };
+		B9B255950D289ED6C31C369D /* Shared.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Shared.framework; path = "$(SRCROOT)/../shared/build/bin/iosSimulatorArm64/debugFramework/Shared.framework"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -97,6 +99,7 @@
 			isa = PBXGroup;
 			children = (
 				3381AE0AF9254A3902F7E1AA /* SyncCoordinatorTests.swift */,
+				A1B2C3D4E5F6A7B8C9D0E1F2 /* KMPTestHelpers.swift */,
 			);
 			path = iosAppTests;
 			sourceTree = "<group>";
@@ -116,7 +119,7 @@
 			isa = PBXGroup;
 			children = (
 				B9B0D97BF56125895673072E /* PulaSmartAgent.app */,
-				599A8E7DFF1C16099BD11BFF /* PulaSmartAgent.xctest */,
+				599A8E7DFF1C16099BD11BFF /* iosAppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -138,7 +141,7 @@
 			);
 			name = iosAppTests;
 			productName = iosAppTests;
-			productReference = 599A8E7DFF1C16099BD11BFF /* PulaSmartAgent.xctest */;
+			productReference = 599A8E7DFF1C16099BD11BFF /* iosAppTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		FC09FFB2117F3EC7A70A96D2 /* iosApp */ = {
@@ -247,6 +250,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A942FE784E442FB02779773E /* SyncCoordinatorTests.swift in Sources */,
+				B1C3D4E5F6A7B8C9D0E1F2A3 /* KMPTestHelpers.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -278,6 +282,7 @@
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+					"$(SRCROOT)/../shared/build/bin/iosSimulatorArm64/debugFramework",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
@@ -384,6 +389,7 @@
 				FRAMEWORK_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/../shared/build/xcode-frameworks/$(CONFIGURATION)/$(SDK_NAME)",
+					"$(SRCROOT)/../shared/build/bin/iosSimulatorArm64/debugFramework",
 				);
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;

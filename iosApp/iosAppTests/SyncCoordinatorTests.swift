@@ -1,6 +1,23 @@
 import XCTest
 import Shared
 
+private enum KMP {
+    static var defaultDispatcher: Kotlinx_coroutines_coreCoroutineDispatcher {
+        Kotlinx_coroutines_coreDispatchers.shared.Default
+    }
+
+    static func instant(_ isoString: String) -> Kotlinx_datetimeInstant {
+        Kotlinx_datetimeInstant.companion.fromEpochMilliseconds(epochMilliseconds: 1_741_075_200_000)
+    }
+
+    static func httpError(code: Int32) -> NSError {
+        NSError(domain: "HttpException", code: Int(code))
+    }
+    static func noInternetError() -> NSError { NSError(domain: "SyncError", code: 1) }
+    static func timeoutError()    -> NSError { NSError(domain: "SyncError", code: 2) }
+    static func unknownError()    -> NSError { NSError(domain: "SyncError", code: 3) }
+}
+
 final class SyncCoordinatorTests: XCTestCase {
 
     private func makeEngine(
@@ -19,7 +36,7 @@ final class SyncCoordinatorTests: XCTestCase {
             api: api,
             networkMonitor: monitor,
             fileSystem: fs,
-            dispatcher: Kotlinx_coroutines_coreDispatchers.shared.Default
+            dispatcher: KMP.defaultDispatcher
         )
     }
 
@@ -27,7 +44,7 @@ final class SyncCoordinatorTests: XCTestCase {
         Shared.SurveyResponse(
             id: id,
             farmerId: "farmer-1",
-            createdAt: Kotlinx_datetimeInstant.companion.parse(isoString: "2026-03-04T08:00:00Z"),
+            createdAt: KMP.instant("2026-03-04T08:00:00Z"),
             status: SyncStatus.pending,
             retryCount: 0,
             nodes: [],
@@ -41,7 +58,7 @@ final class SyncCoordinatorTests: XCTestCase {
             surveyId: surveyId,
             localPath: "/tmp/\(id).jpg",
             sizeBytes: 1024,
-            createdAt: Kotlinx_datetimeInstant.companion.parse(isoString: "2026-03-04T08:00:00Z"),
+            createdAt: KMP.instant("2026-03-04T08:00:00Z"),
             uploadStatus: AttachmentUploadStatus.pending,
             retryCount: 0,
             lastError: nil
@@ -131,7 +148,7 @@ final class SyncCoordinatorTests: XCTestCase {
             api: api,
             networkMonitor: StubNetworkMonitor(connected: true),
             fileSystem: fs,
-            dispatcher: Kotlinx_coroutines_coreDispatchers.shared.Default
+            dispatcher: KMP.defaultDispatcher
         )
 
         let result = await runSync(engine: engine)
@@ -147,7 +164,7 @@ final class SyncCoordinatorTests: XCTestCase {
 
         var events: [SyncProgress?] = []
         let job = FlowCollectorHelper.shared.collect(flow: engine.progress) { events.append($0) }
-        defer { job.cancel(cause: KotlinCancellationException()) }
+        defer { job.cancel(cause: nil) }
 
         _ = await runSync(engine: engine)
 
@@ -167,54 +184,62 @@ private final class FakeSurveyApi: NSObject, SurveyApi {
 
     init(behavior: @escaping (Int) -> FakeApiResponse) { self.behavior = behavior }
 
-    func uploadSurvey(response: Shared.SurveyResponse, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
+    @objc(uploadSurveyResponse:completionHandler:)
+    func uploadSurvey(response: SurveyResponse, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
         resolve(behavior(surveyCallCount), completionHandler); surveyCallCount += 1
     }
 
-    func uploadAttachment(attachment: Shared.Attachment, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
+    @objc(uploadAttachmentAttachment:completionHandler:)
+    func uploadAttachment(attachment: Attachment, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
         resolve(behavior(attachCallCount), completionHandler); attachCallCount += 1
     }
 
     private func resolve(_ r: FakeApiResponse, _ cb: (KotlinUnit?, Error?) -> Void) {
         switch r {
         case .success:               cb(KotlinUnit(), nil)
-        case .serverError(let code): cb(nil, HttpException(code: code))
-        case .networkLost:           cb(nil, SyncErrorException(error: SyncErrorNoInternet()))
-        case .timeout:               cb(nil, SyncErrorException(error: SyncErrorTimeout()))
-        case .unknown:               cb(nil, SyncErrorException(error: SyncErrorUnknown()))
+        case .serverError(let code): cb(nil, KMP.httpError(code: code))
+        case .networkLost:           cb(nil, KMP.noInternetError())
+        case .timeout:               cb(nil, KMP.timeoutError())
+        case .unknown:               cb(nil, KMP.unknownError())
         }
     }
 }
 
 private final class FakeRepository: NSObject, SurveyRepository {
-    private var surveys: [Shared.SurveyResponse]
+    private var surveys: [SurveyResponse]
     private(set) var syncedIds: [String] = []
 
-    init(surveys: [Shared.SurveyResponse]) { self.surveys = surveys }
+    init(surveys: [SurveyResponse]) { self.surveys = surveys }
 
-    func getPendingSurveys(completionHandler: @escaping ([Shared.SurveyResponse]?, Error?) -> Void) {
+    @objc(getPendingSurveysWithCompletionHandler:)
+    func getPendingSurveys(completionHandler: @escaping ([SurveyResponse]?, Error?) -> Void) {
         let pending = surveys.filter {
             ($0.status == SyncStatus.pending || $0.status == SyncStatus.failed) && $0.retryCount < 5
         }
         completionHandler(pending, nil)
     }
 
-    func saveSurvey(response: Shared.SurveyResponse, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
+    @objc(saveSurveyResponse:completionHandler:)
+    func saveSurvey(response: SurveyResponse, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
         surveys.append(response); completionHandler(KotlinUnit(), nil)
     }
 
+    @objc(markAsSyncedId:completionHandler:)
     func markAsSynced(id: String, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
         syncedIds.append(id); completionHandler(KotlinUnit(), nil)
     }
 
+    @objc(markAsFailedId:error:completionHandler:)
     func markAsFailed(id: String, error: SyncError, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
         completionHandler(KotlinUnit(), nil)
     }
 
+    @objc(incrementRetryId:completionHandler:)
     func incrementRetry(id: String, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
         completionHandler(KotlinUnit(), nil)
     }
 
+    @objc(pinRetryToMaxId:completionHandler:)
     func pinRetryToMax(id: String, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
         completionHandler(KotlinUnit(), nil)
     }
@@ -223,18 +248,22 @@ private final class FakeRepository: NSObject, SurveyRepository {
 private final class FakeAttachmentRepo: NSObject, AttachmentRepository {
     private(set) var uploadedIds: [String] = []
 
-    func getUploadedAttachments(completionHandler: @escaping ([Shared.Attachment]?, Error?) -> Void) {
+    @objc(getUploadedAttachmentsWithCompletionHandler:)
+    func getUploadedAttachments(completionHandler: @escaping ([Attachment]?, Error?) -> Void) {
         completionHandler([], nil)
     }
 
+    @objc(markAsUploadedId:completionHandler:)
     func markAsUploaded(id: String, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
         uploadedIds.append(id); completionHandler(KotlinUnit(), nil)
     }
 
+    @objc(markAsFailedId:error:completionHandler:)
     func markAsFailed(id: String, error: SyncError, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
         completionHandler(KotlinUnit(), nil)
     }
 
+    @objc(incrementRetryId:completionHandler:)
     func incrementRetry(id: String, completionHandler: @escaping (KotlinUnit?, Error?) -> Void) {
         completionHandler(KotlinUnit(), nil)
     }
@@ -244,6 +273,7 @@ private final class StubNetworkMonitor: NSObject, NetworkMonitor {
     private let connected: Bool
     init(connected: Bool) { self.connected = connected }
 
+    @objc(isConnectedWithCompletionHandler:)
     func isConnected(completionHandler: @escaping (KotlinBoolean?, Error?) -> Void) {
         completionHandler(KotlinBoolean(bool: connected), nil)
     }
@@ -255,15 +285,8 @@ private final class StubFileSystem: NSObject, FileSystem {
 
     init(availableBytes: Int64) { self.availableBytes = availableBytes }
 
-    func delete(path: String) -> KotlinBoolean {
-        deletedPaths.append(path); return KotlinBoolean(bool: true)
-    }
-
-    func exists(path: String) -> KotlinBoolean {
-        KotlinBoolean(bool: !deletedPaths.contains(path))
-    }
-
-    func getFileSize(path: String) -> KotlinLong { KotlinLong(value: 0) }
-
-    func getAvailableStorageBytes() -> KotlinLong { KotlinLong(value: availableBytes) }
+    func delete(path: String) -> Bool { deletedPaths.append(path); return true }
+    func exists(path: String) -> Bool { !deletedPaths.contains(path) }
+    func getFileSize(path: String) -> Int64 { 0 }
+    func getAvailableStorageBytes() -> Int64 { availableBytes }
 }

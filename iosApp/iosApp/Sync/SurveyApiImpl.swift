@@ -3,22 +3,6 @@ import Shared
 
 // URLSession implementation of the KMP SurveyApi interface.
 final class SurveyApiImpl: NSObject, SurveyApi {
-    func uploadSurvey(response: SurveyResponse) async throws -> Any? {
-        <#code#>
-    }
-    
-    func uploadSurvey(response: SurveyResponse, completionHandler: @escaping @Sendable (Any?, (any Error)?) -> Void) {
-        <#code#>
-    }
-    
-    func uploadAttachment(attachment: Attachment) async throws -> Any? {
-        <#code#>
-    }
-    
-    func uploadAttachment(attachment: Attachment, completionHandler: @escaping @Sendable (Any?, (any Error)?) -> Void) {
-        <#code#>
-    }
-
 
     private let session: URLSession
     private let baseURL: URL
@@ -29,8 +13,8 @@ final class SurveyApiImpl: NSObject, SurveyApi {
     }
 
     func uploadSurvey(
-        response: Shared.SurveyResponse,
-        completionHandler: @escaping (KotlinUnit?, Error?) -> Void
+        response: SurveyResponse,
+        completionHandler: @escaping @Sendable (Any?, (any Error)?) -> Void
     ) {
         Task {
             do {
@@ -44,8 +28,8 @@ final class SurveyApiImpl: NSObject, SurveyApi {
     }
 
     func uploadAttachment(
-        attachment: Shared.Attachment,
-        completionHandler: @escaping (KotlinUnit?, Error?) -> Void
+        attachment: Attachment,
+        completionHandler: @escaping @Sendable (Any?, (any Error)?) -> Void
     ) {
         Task {
             do {
@@ -77,11 +61,11 @@ final class SurveyApiImpl: NSObject, SurveyApi {
             throw NSError(domain: "SurveyApi", code: -1)
         }
         guard (200..<300).contains(http.statusCode) else {
-            throw HttpException(code: Int32(http.statusCode)) as! any Error
+            throw NSError(domain: "SurveyApi", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP \(http.statusCode)"])
         }
     }
 
-    private func buildMultipart(boundary: String, fileData: Data, attachment: Shared.Attachment) -> Data {
+    private func buildMultipart(boundary: String, fileData: Data, attachment: Attachment) -> Data {
         var body = Data()
         func append(_ s: String) { body.append(s.data(using: .utf8)!) }
         append("--\(boundary)\r\n")
@@ -98,6 +82,6 @@ private struct SurveyDTO: Encodable {
     let farmerId: String
 }
 
-private extension Shared.SurveyResponse {
+private extension SurveyResponse {
     func toDTO() -> SurveyDTO { SurveyDTO(id: id, farmerId: farmerId) }
 }
