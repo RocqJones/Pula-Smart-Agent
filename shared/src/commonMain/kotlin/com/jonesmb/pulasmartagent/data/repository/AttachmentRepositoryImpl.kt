@@ -2,6 +2,7 @@ package com.jonesmb.pulasmartagent.data.repository
 
 import app.cash.sqldelight.db.SqlDriver
 import com.jonesmb.pulasmartagent.db.SmartAgentDatabase
+import com.jonesmb.pulasmartagent.domain.errors.SyncError
 import com.jonesmb.pulasmartagent.domain.model.Attachment
 import com.jonesmb.pulasmartagent.domain.model.status.AttachmentUploadStatus
 import com.jonesmb.pulasmartagent.domain.repository.AttachmentRepository
@@ -28,4 +29,16 @@ class AttachmentRepositoryImpl(driver: SqlDriver) : AttachmentRepository {
                 )
             }
         }
+
+    override suspend fun markAsUploaded(id: String): Unit = withContext(Dispatchers.Default) {
+        queries.markAsUploaded(id)
+    }
+
+    override suspend fun markAsFailed(id: String, error: SyncError): Unit = withContext(Dispatchers.Default) {
+        queries.markAsFailed(last_error = error.toString(), id = id)
+    }
+
+    override suspend fun incrementRetry(id: String): Unit = withContext(Dispatchers.Default) {
+        queries.incrementRetry(id)
+    }
 }

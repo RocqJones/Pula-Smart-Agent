@@ -24,3 +24,11 @@ SELECT * FROM attachment WHERE survey_id = ?;
 selectUploaded:
 SELECT * FROM attachment WHERE upload_status = 'UPLOADED';
 
+markAsUploaded:
+UPDATE attachment SET upload_status = 'UPLOADED', last_error = NULL WHERE id = ?;
+
+markAsFailed:
+UPDATE attachment SET upload_status = 'FAILED', last_error = ? WHERE id = ?;
+
+incrementRetry:
+UPDATE attachment SET retry_count = retry_count + 1 WHERE id = ?;

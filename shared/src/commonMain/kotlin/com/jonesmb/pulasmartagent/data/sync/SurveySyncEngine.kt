@@ -4,8 +4,10 @@ import com.jonesmb.pulasmartagent.core.constants.StoragePolicy
 import com.jonesmb.pulasmartagent.core.extensions.toSyncError
 import com.jonesmb.pulasmartagent.data.network.SurveyApi
 import com.jonesmb.pulasmartagent.domain.errors.SyncError
+import com.jonesmb.pulasmartagent.domain.model.SurveyResponse
 import com.jonesmb.pulasmartagent.domain.model.SyncResult
 import com.jonesmb.pulasmartagent.domain.model.SyncStopReason
+import com.jonesmb.pulasmartagent.domain.repository.AttachmentRepository
 import com.jonesmb.pulasmartagent.domain.repository.SurveyRepository
 import com.jonesmb.pulasmartagent.platform.filesystem.FileSystem
 import com.jonesmb.pulasmartagent.platform.network.NetworkMonitor
@@ -17,9 +19,10 @@ import kotlinx.coroutines.withContext
 /**
  * Uploads all pending surveys one-by-one, stopping early on network loss or a fatal error, and
  * returning a [SyncResult] that summarizes what succeeded, what failed, and why the run stopped.
- * */
+ */
 class SurveySyncEngine(
     private val repository: SurveyRepository,
+    private val attachmentRepository: AttachmentRepository,
     private val api: SurveyApi,
     private val networkMonitor: NetworkMonitor,
     private val fileSystem: FileSystem,
@@ -31,7 +34,6 @@ class SurveySyncEngine(
         withContext(dispatcher) {
             val succeeded = mutableListOf<String>()
             val failed = mutableListOf<String>()
-            var stopReason: SyncStopReason? = null
 
             if (fileSystem.getAvailableStorageBytes() < StoragePolicy.MIN_REQUIRED_FREE_SPACE_BYTES) {
                 return@withContext SyncResult(succeeded, failed, SyncStopReason.LowStorage)
@@ -42,51 +44,79 @@ class SurveySyncEngine(
             for (survey in pending) {
                 if (!networkMonitor.isConnected()) {
                     failed.add(survey.id)
-                    stopReason = SyncStopReason.NetworkLost
-                    break
+                    return@withContext SyncResult(succeeded, failed, SyncStopReason.NetworkLost)
                 }
 
-                val result = api.uploadSurvey(survey)
-
-                result.fold(
-                    onSuccess = {
-                        repository.markAsSynced(survey.id)
-                        if (StoragePolicy.AUTO_DELETE_AFTER_UPLOAD) {
-                            survey.attachments.forEach { fileSystem.delete(it.localPath) }
-                        }
-                        succeeded.add(survey.id)
-                    },
+                // Phase 1 — upload survey metadata
+                val metaResult = api.uploadSurvey(survey)
+                val metaStop = metaResult.fold(
+                    onSuccess = { null },
                     onFailure = { throwable ->
                         val error = throwable.toSyncError()
-
-                        when {
-                            error == SyncError.NoInternet || error == SyncError.Timeout -> {
-                                repository.markAsFailed(survey.id, error)
-                                repository.incrementRetry(survey.id)
-                                failed.add(survey.id)
-                                stopReason = when (error) {
-                                    SyncError.NoInternet -> SyncStopReason.NetworkLost
-                                    else -> SyncStopReason.FatalError
-                                }
-                                return@withContext SyncResult(succeeded, failed, stopReason)
-                            }
-                            error.isRetriable -> {
-                                repository.markAsFailed(survey.id, error)
-                                repository.incrementRetry(survey.id)
-                                failed.add(survey.id)
-                            }
-                            else -> {
-                                repository.markAsFailed(survey.id, error)
-                                failed.add(survey.id)
-                                stopReason = SyncStopReason.FatalError
-                                return@withContext SyncResult(succeeded, failed, stopReason)
-                            }
-                        }
+                        repository.markAsFailed(survey.id, error)
+                        if (error.isRetriable) repository.incrementRetry(survey.id)
+                        failed.add(survey.id)
+                        stopReasonFor(error)
                     }
                 )
+                if (metaStop != null) {
+                    return@withContext SyncResult(succeeded, failed, metaStop)
+                }
+
+                // Phase 2 — upload attachments sequentially
+                val attachStop = uploadAttachments(survey, failed)
+                if (attachStop != null) {
+                    return@withContext SyncResult(succeeded, failed, attachStop)
+                }
+
+                repository.markAsSynced(survey.id)
+                succeeded.add(survey.id)
             }
 
-            SyncResult(succeeded, failed, stopReason)
+            SyncResult(succeeded, failed, null)
         }
+    }
+
+    // Returns a SyncStopReason if the caller should abort the entire sync, null to continue.
+    private suspend fun uploadAttachments(
+        survey: SurveyResponse,
+        failed: MutableList<String>,
+    ): SyncStopReason? {
+        for (attachment in survey.attachments) {
+            if (!networkMonitor.isConnected()) {
+                repository.markAsFailed(survey.id, SyncError.NoInternet)
+                failed.add(survey.id)
+                return SyncStopReason.NetworkLost
+            }
+
+            val result = api.uploadAttachment(attachment)
+            result.fold(
+                onSuccess = {
+                    attachmentRepository.markAsUploaded(attachment.id)
+                    if (StoragePolicy.AUTO_DELETE_AFTER_UPLOAD) {
+                        fileSystem.delete(attachment.localPath)
+                    }
+                },
+                onFailure = { throwable ->
+                    val error = throwable.toSyncError()
+                    attachmentRepository.markAsFailed(attachment.id, error)
+                    if (error.isRetriable) attachmentRepository.incrementRetry(attachment.id)
+                    val stop = stopReasonFor(error)
+                    if (stop != null) {
+                        repository.markAsFailed(survey.id, error)
+                        failed.add(survey.id)
+                        return stop
+                    }
+                }
+            )
+        }
+        return null
+    }
+
+    private fun stopReasonFor(error: SyncError): SyncStopReason? = when {
+        error == SyncError.NoInternet -> SyncStopReason.NetworkLost
+        error == SyncError.Timeout    -> SyncStopReason.FatalError
+        !error.isRetriable            -> SyncStopReason.FatalError
+        else                          -> null
     }
 }
