@@ -5,6 +5,7 @@ import com.jonesmb.pulasmartagent.core.extensions.toSyncError
 import com.jonesmb.pulasmartagent.data.network.SurveyApi
 import com.jonesmb.pulasmartagent.domain.errors.SyncError
 import com.jonesmb.pulasmartagent.domain.model.SurveyResponse
+import com.jonesmb.pulasmartagent.domain.model.SyncProgress
 import com.jonesmb.pulasmartagent.domain.model.SyncResult
 import com.jonesmb.pulasmartagent.domain.model.SyncStopReason
 import com.jonesmb.pulasmartagent.domain.repository.AttachmentRepository
@@ -12,6 +13,9 @@ import com.jonesmb.pulasmartagent.domain.repository.SurveyRepository
 import com.jonesmb.pulasmartagent.platform.filesystem.FileSystem
 import com.jonesmb.pulasmartagent.platform.network.NetworkMonitor
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -19,6 +23,7 @@ import kotlinx.coroutines.withContext
 /**
  * Uploads all pending surveys one-by-one, stopping early on network loss or a fatal error, and
  * returning a [SyncResult] that summarizes what succeeded, what failed, and why the run stopped.
+ * Progress is exposed via [progress] so a UI layer can observe "Uploading X of Y" in real time.
  */
 class SurveySyncEngine(
     private val repository: SurveyRepository,
@@ -29,6 +34,9 @@ class SurveySyncEngine(
     private val dispatcher: CoroutineDispatcher,
 ) {
     private val mutex = Mutex()
+
+    private val _progress = MutableStateFlow<SyncProgress?>(null)
+    val progress: StateFlow<SyncProgress?> = _progress.asStateFlow()
 
     suspend fun sync(): SyncResult = mutex.withLock {
         withContext(dispatcher) {
@@ -41,22 +49,34 @@ class SurveySyncEngine(
             }
 
             val pending = repository.getPendingSurveys()
+            val total = pending.size
 
-            for (survey in pending) {
+            pending.forEachIndexed { index, survey ->
+                _progress.value = SyncProgress(
+                    current = index + 1,
+                    total = total,
+                    currentSurveyId = survey.id,
+                )
+
                 if (!networkMonitor.isConnected()) {
                     failed.add(survey.id)
+                    _progress.value = null
                     return@withContext SyncResult(succeeded, failed, SyncStopReason.NetworkLost)
                 }
 
                 // Phase 1 — upload survey metadata.
                 // Returns: true = proceed, false = survey failed (continue to next), null = abort sync.
                 val metaOk = uploadMeta(survey, failed, onStop = { stopReason = it })
-                if (metaOk == null) return@withContext SyncResult(succeeded, failed, stopReason)
-                if (!metaOk) continue
+                if (metaOk == null) {
+                    _progress.value = null
+                    return@withContext SyncResult(succeeded, failed, stopReason)
+                }
+                if (!metaOk) return@forEachIndexed
 
                 // Phase 2 — upload attachments sequentially.
                 val attachStop = uploadAttachments(survey, failed)
                 if (attachStop != null) {
+                    _progress.value = null
                     return@withContext SyncResult(succeeded, failed, attachStop)
                 }
 
@@ -64,6 +84,7 @@ class SurveySyncEngine(
                 succeeded.add(survey.id)
             }
 
+            _progress.value = null
             SyncResult(succeeded, failed, null)
         }
     }
