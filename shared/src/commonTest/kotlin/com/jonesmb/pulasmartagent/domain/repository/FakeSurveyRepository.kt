@@ -1,5 +1,6 @@
 package com.jonesmb.pulasmartagent.domain.repository
 
+import com.jonesmb.pulasmartagent.core.constants.StoragePolicy
 import com.jonesmb.pulasmartagent.domain.errors.SyncError
 import com.jonesmb.pulasmartagent.domain.model.SurveyResponse
 import com.jonesmb.pulasmartagent.domain.model.status.SyncStatus
@@ -18,7 +19,10 @@ class FakeSurveyRepository(
     }
 
     override suspend fun getPendingSurveys(): List<SurveyResponse> =
-        surveys.filter { it.status == SyncStatus.PENDING }
+        surveys.filter {
+            (it.status == SyncStatus.PENDING || it.status == SyncStatus.FAILED)
+                && it.retryCount < StoragePolicy.MAX_SURVEY_RETRY
+        }
 
     override suspend fun markAsSynced(id: String) {
         synced.add(id)

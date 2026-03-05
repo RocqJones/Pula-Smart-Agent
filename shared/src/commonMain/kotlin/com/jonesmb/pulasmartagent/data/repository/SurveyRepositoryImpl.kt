@@ -55,7 +55,7 @@ class SurveyRepositoryImpl(driver: SqlDriver) : SurveyRepository {
     }
 
     override suspend fun getPendingSurveys(): List<SurveyResponse> = withContext(Dispatchers.Default) {
-        surveyQueries.selectPending().executeAsList().map { row ->
+        surveyQueries.selectPending(maxRetry = StoragePolicy.MAX_SURVEY_RETRY.toLong()).executeAsList().map { row ->
             val nodes = buildNodeTree(row.id)
             val attachments = attachmentQueries.selectBySurveyId(row.id).executeAsList().map {
                 it.toDomain()
