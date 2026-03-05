@@ -1,39 +1,167 @@
-This is a Kotlin Multiplatform project targeting Android, iOS.
+# Smart Agent - Prod
 
-* [/composeApp](./composeApp/src) is for code that will be shared across your Compose Multiplatform applications.
-  It contains several subfolders:
-  - [commonMain](./composeApp/src/commonMain/kotlin) is for code that’s common for all targets.
-  - Other folders are for Kotlin code that will be compiled for only the platform indicated in the folder name.
-    For example, if you want to use Apple’s CoreCrypto for the iOS part of your Kotlin app,
-    the [iosMain](./composeApp/src/iosMain/kotlin) folder would be the right place for such calls.
-    Similarly, if you want to edit the Desktop (JVM) specific part, the [jvmMain](./composeApp/src/jvmMain/kotlin)
-    folder is the appropriate location.
+Smart Agent is a Kotlin Multiplatform (KMP) mobile application targeting **Android** and **iOS**.  
+Built with Compose Multiplatform for the UI layer and following an **MVI + offline-first** architecture with a single source of truth driven by a local SQLDelight database.
 
-* [/iosApp](./iosApp/iosApp) contains iOS applications. Even if you’re sharing your UI with Compose Multiplatform,
-  you need this entry point for your iOS app. This is also where you should add SwiftUI code for your project.
-
-* [/shared](./shared/src) is for the code that will be shared between all targets in the project.
-  The most important subfolder is [commonMain](./shared/src/commonMain/kotlin). If preferred, you
-  can add code to the platform-specific folders here too.
-
-### Build and Run Android Application
-
-To build and run the development version of the Android app, use the run configuration from the run widget
-in your IDE’s toolbar or build it directly from the terminal:
-- on macOS/Linux
-  ```shell
-  ./gradlew :composeApp:assembleDebug
-  ```
-- on Windows
-  ```shell
-  .\gradlew.bat :composeApp:assembleDebug
-  ```
-
-### Build and Run iOS Application
-
-To build and run the development version of the iOS app, use the run configuration from the run widget
-in your IDE’s toolbar or open the [/iosApp](./iosApp) directory in Xcode and run it from there.
+The core feature is a **survey response sync engine** — farmers fill in surveys offline and the app reliably uploads them when connectivity is restored, handling retries, attachment uploads, and storage constraints automatically.
 
 ---
 
-Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html)…
+## Project structure
+
+| Module | Purpose |
+|---|---|
+| [`composeApp`](./composeApp/src) | Android & shared UI — Compose Multiplatform screens, ViewModels, MVI state |
+| [`shared`](./shared/src) | Pure Kotlin business logic shared across all platforms (domain, data, db, core, platform) |
+| [`iosApp`](./iosApp/iosApp) | iOS entry point — SwiftUI host that loads the shared Compose UI |
+
+---
+
+## Build and run
+
+### Android
+```shell
+./gradlew :composeApp:assembleDebug
+```
+
+### iOS
+Open [`/iosApp`](./iosApp) in Xcode and run, or use the IDE run configuration.
+
+---
+
+## Module / package structure
+
+All shared business logic lives under:
+```
+shared/src/commonMain/kotlin/com/jonesmb/pulasmartagent/
+```
+Matching tests live under:
+```
+shared/src/commonTest/kotlin/com/jonesmb/pulasmartagent/
+```
+Platform implementations (`androidMain` / `iosMain`) fulfill `expect` declarations from `commonMain`.
+
+```
+com.jonesmb.pulasmartagent
+│
+├── domain/                        # Pure business logic — zero Android/iOS imports
+│   ├── model/
+│   │   ├── SurveyResponse         # Root aggregate: farmerId, nodes, attachments, SyncStatus
+│   │   ├── ResponseNode           # Sealed: Answer | RepeatingSection (arbitrary nesting)
+│   │   ├── Attachment             # Photo/file with upload lifecycle (retryCount, lastError)
+│   │   ├── SyncResult             # Outcome of one sync run (succeededIds, failedIds, stoppedReason)
+│   │   └── status/
+│   │       ├── SyncStatus         # PENDING | IN_PROGRESS | SYNCED | FAILED
+│   │       └── AttachmentUploadStatus  # PENDING | UPLOADING | UPLOADED | FAILED
+│   ├── errors/
+│   │   └── SyncError              # Sealed: NoInternet | Timeout | ServerError(code) | SerializationError | Unknown
+│   │                              # Each variant carries isRetriable: Boolean
+│   └── repository/
+│       ├── SurveyRepository       # Interface: save, getPending, markSynced/Failed, retry ops
+│       └── AttachmentRepository   # Interface: markUploaded/Failed, incrementRetry, getUploaded
+│
+├── data/                          # Implementations that satisfy domain contracts
+│   ├── repository/
+│   │   ├── SurveyRepositoryImpl   # SQLDelight-backed; getPending filters PENDING|FAILED + retryCount < MAX
+│   │   └── AttachmentRepositoryImpl
+│   ├── sync/
+│   │   └── SurveySyncEngine       # Mutex-guarded sync loop; storage pre-flight check;
+│   │                              # per-survey: meta upload → attachment upload → markSynced
+│   │                              # stop rules: NetworkLost on IOException/Timeout,
+│   │                              #             continue on 500+, FatalError on unknown
+│   ├── network/
+│   │   └── SurveyApi              # Interface: uploadSurvey(SurveyResponse), uploadAttachment(Attachment)
+│   └── attachments/
+│       └── AttachmentManager      # Deletes local files post-upload when StoragePolicy allows
+│
+├── db/                            # SQLDelight database layer
+│   ├── driver/
+│   │   └── DriverFactory          # expect/actual — creates SqlDriver per platform
+│   └── adapters/
+│       ├── EnumAdapters           # Column adapters: SyncStatus/AttachmentUploadStatus ↔ TEXT
+│       └── InstantAdapter         # kotlinx-datetime Instant ↔ INTEGER (epoch ms)
+│
+├── core/                          # Cross-cutting utilities with no domain dependencies
+│   ├── constants/
+│   │   ├── Constants              # NODE_TYPE_ANSWER, NODE_TYPE_REPEATING_SECTION
+│   │   └── StoragePolicy          # MIN_REQUIRED_FREE_SPACE_BYTES, MAX_SURVEY_RETRY,
+│   │                              # MAX_ATTACHMENT_RETRY, AUTO_DELETE_AFTER_UPLOAD
+│   ├── extensions/
+│   │   ├── ExceptionMapper        # Throwable.toSyncError(): maps IOException/Timeout/HttpException → SyncError
+│   │   └── SyncErrorExt           # SyncError.toDbString() for persistence
+│   └── network/
+│       ├── HttpException          # Platform-agnostic HTTP error carrying response code
+│       ├── SyncErrorException     # Bridges typed SyncError into Throwable for Result.failure
+│       └── IOExceptionCheck       # expect fun Throwable.isIOException() — platform-specific detection
+│
+└── platform/                      # expect interfaces; actuals in androidMain / iosMain
+    ├── network/
+    │   └── NetworkMonitor         # isConnected(): Boolean
+    └── filesystem/
+        └── FileSystem             # delete, exists, getFileSize, getAvailableStorageBytes
+```
+
+> **Dependency rule:**  
+> `domain` → no imports from anywhere in this project.  
+> `data` → may import `domain`, `db`, `core`.  
+> `core` → may import `domain` only.  
+> `platform` → `commonMain` holds only `expect` interfaces; actuals live in `androidMain` / `iosMain`.
+
+---
+
+## Platform implementations
+
+| Interface | Android | iOS |
+|---|---|---|
+| `NetworkMonitor` | `AndroidNetworkMonitor` — `ConnectivityManager` + `NET_CAPABILITY_INTERNET` | `IosNetworkMonitor` — `NWPathMonitor` |
+| `FileSystem` | `AndroidFileSystem` — `java.io.File`, `usableSpace` from app files dir | `IosFileSystem` — `NSFileManager` |
+| `DriverFactory` | `AndroidSqliteDriver` | `NativeSqliteDriver` |
+| `IOExceptionCheck` | checks `java.io.IOException` | checks `NSURLErrorDomain` / POSIX errors |
+
+---
+
+## Sync engine behaviour
+
+```
+sync()
+ ├── storage pre-flight: availableBytes < 100 MB  → SyncResult(LowStorage)
+ ├── for each PENDING/FAILED survey (retryCount < MAX_SURVEY_RETRY):
+ │    ├── network check                            → stop NetworkLost
+ │    ├── uploadSurvey()
+ │    │    ├── success                             → proceed to attachments
+ │    │    ├── IOException / Timeout               → markFailed, stop NetworkLost
+ │    │    ├── ServerError 400-499                 → markFailed, pinRetryToMax, continue
+ │    │    ├── ServerError 500+                    → markFailed, incrementRetry, continue
+ │    │    └── Unknown                             → markFailed, stop FatalError
+ │    ├── for each attachment:
+ │    │    ├── network check                       → stop NetworkLost
+ │    │    ├── uploadAttachment()
+ │    │    │    ├── success                        → markUploaded, delete local file if policy
+ │    │    │    ├── IOException / Timeout          → markFailed, stop NetworkLost
+ │    │    │    ├── ServerError 400-499            → markFailed, stop FatalError
+ │    │    │    └── ServerError 500+               → markFailed, incrementRetry, continue
+ │    └── markAsSynced
+ └── SyncResult(succeededIds, failedIds, stoppedReason)
+```
+
+---
+
+## Tests
+
+| Test file | Covers |
+|---|---|
+| `SurveySyncEngineTest` | 16 scenarios: all-succeed, partial 500/400, timeout/IOException early stop, concurrent mutex, LowStorage pre-flight, attachment upload + delete, retriable/fatal attachment errors, partial attachment success |
+| `SyncErrorTest` | `isRetriable` correctness for every `SyncError` variant |
+| `SurveyResponseTest` | Domain model construction and node tree |
+| `SyncResultTest` | `SyncStopReason` variants |
+
+Test infrastructure (all in `commonTest`):
+
+| Fake | Purpose |
+|---|---|
+| `FakeSurveyApi` | Lambda-per-call-count for survey and attachment responses; simulates Success / ServerError / Timeout / NetworkLost / Unknown |
+| `FakeSurveyRepository` | In-memory store; mirrors `getPendingSurveys` filter (PENDING\|FAILED + retryCount < MAX) |
+| `FakeAttachmentRepository` | Records uploaded/failed/retried attachment ids |
+| `FakeNetworkMonitor` | Fixed `isConnected` boolean |
+| `FakeFileSystem` | Records `deleted` paths; `exists()` returns false for deleted paths |
+
